@@ -45,6 +45,7 @@ struct WaiterInner {
     // NB: these fields are only modified/read under the lock of a
     // `ParkingSpot`.
     notified: bool,
+    interrupted: bool,
     next: Option<SendSyncPtr<WaiterInner>>,
     prev: Option<SendSyncPtr<WaiterInner>>,
 }
@@ -126,6 +127,7 @@ impl ParkingSpot {
                 next: None,
                 prev: None,
                 notified: false,
+                interrupted: false,
                 thread: thread::current(),
             })
         });
@@ -135,6 +137,7 @@ impl ParkingSpot {
         // Clear the `notified` flag if it was previously notified and
         // configure the thread to wakeup as our own.
         waiter.notified = false;
+        waiter.interrupted = false;
         waiter.thread = thread::current();
 
         let ptr = SendSyncPtr::new(NonNull::from(&mut **waiter));
@@ -170,7 +173,7 @@ impl ParkingSpot {
                 thread::park_timeout(timeout);
                 inner = self.inner.lock().unwrap();
 
-                if ptr.as_ref().notified {
+                if ptr.as_ref().notified || ptr.as_ref().interrupted {
                     break false;
                 }
             };
@@ -180,6 +183,10 @@ impl ParkingSpot {
                 // waiter queue, so remove it.
                 inner.get_mut(&key).unwrap().remove(ptr);
                 WaitResult::TimedOut
+            } else if ptr.as_ref().interrupted {
+                assert!(ptr.as_ref().next.is_none());
+                assert!(ptr.as_ref().prev.is_none());
+                WaitResult::Interrupted
             } else {
                 // If this node was notified then we should not be in a queue
                 // at this point.
@@ -216,6 +223,34 @@ impl ParkingSpot {
         });
 
         unparked
+    }
+
+    /// Interrupt all waiters in this parking spot.
+    ///
+    /// This wakes waiters on every address and causes their wait operation to
+    /// return `WaitResult::Interrupted`. It is used by the fork-local
+    /// Component Model OS-thread cancellation path, where the runtime does not
+    /// know which guest address a child is currently blocked on.
+    pub fn interrupt_all(&self) -> u32 {
+        let mut interrupted = 0;
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("failed to lock inner parking table");
+
+        for spot in inner.values_mut() {
+            unsafe {
+                while let Some(mut head) = spot.pop() {
+                    let head = head.as_mut();
+                    assert!(head.next.is_none());
+                    head.interrupted = true;
+                    head.thread.unpark();
+                    interrupted += 1;
+                }
+            }
+        }
+
+        interrupted
     }
 
     fn with_lot<T, F: FnMut(&mut Spot)>(&self, addr: &T, mut f: F) {
@@ -362,6 +397,40 @@ mod tests {
             thread1.join().unwrap();
             thread2.join().unwrap();
             thread3.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn atomic_wait_interrupt_all() {
+        let parking_spot = ParkingSpot::default();
+        let atomic = AtomicU64::new(0);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+
+        thread::scope(|s| {
+            let waiter = s.spawn(|| {
+                let mut waiter = Waiter::default();
+                ready_tx.send(()).unwrap();
+                parking_spot.wait64(&atomic, 0, None, &mut waiter)
+            });
+
+            ready_rx.recv().unwrap();
+            let mut interrupted = false;
+            for _ in 0..100 {
+                if parking_spot.interrupt_all() == 1 {
+                    interrupted = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            if !interrupted {
+                atomic.store(1, Ordering::SeqCst);
+                parking_spot.notify(&atomic, u32::MAX);
+            }
+
+            assert_eq!(
+                waiter.join().unwrap(),
+                crate::runtime::vm::WaitResult::Interrupted
+            );
         });
     }
 

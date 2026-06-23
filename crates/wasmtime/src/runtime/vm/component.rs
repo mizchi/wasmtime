@@ -530,6 +530,31 @@ impl ComponentInstance {
         }
     }
 
+    /// Replaces a runtime memory pointer for the fork-local component thread
+    /// experiment.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` remains valid for this component
+    /// instance's lifetime and that using it from this instance's execution
+    /// context does not violate store, ownership, or thread-safety invariants.
+    #[cfg(feature = "component-model-async")]
+    #[allow(
+        dead_code,
+        reason = "fork-local scaffold used once the OS-thread spawn path is wired"
+    )]
+    pub(crate) unsafe fn component_thread_rebind_runtime_memory(
+        self: Pin<&mut Self>,
+        idx: RuntimeMemoryIndex,
+        ptr: NonNull<VMMemoryDefinition>,
+    ) {
+        unsafe {
+            let offset = self.offsets.runtime_memory(idx);
+            let storage = self.vmctx_plus_offset_mut::<VmPtr<VMMemoryDefinition>>(offset);
+            *storage = ptr.into();
+        }
+    }
+
     /// Same as `set_runtime_memory` but for realloc function pointers.
     pub fn set_runtime_realloc(
         self: Pin<&mut Self>,
@@ -586,6 +611,31 @@ impl ComponentInstance {
             let storage = self.vmctx_plus_offset_mut::<VMTableImport>(offset);
             debug_assert!((*storage).vmctx.as_ptr() as usize == INVALID_PTR);
             debug_assert!((*storage).from.as_ptr() as usize == INVALID_PTR);
+            *storage = import;
+        }
+    }
+
+    /// Replaces a runtime table import for the fork-local component thread
+    /// experiment.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `import` remains valid for this component
+    /// instance's lifetime and that using it from this instance's execution
+    /// context does not violate store, ownership, or thread-safety invariants.
+    #[cfg(feature = "component-model-async")]
+    #[allow(
+        dead_code,
+        reason = "fork-local scaffold used once the OS-thread spawn path is wired"
+    )]
+    pub(crate) unsafe fn component_thread_rebind_runtime_table(
+        self: Pin<&mut Self>,
+        idx: RuntimeTableIndex,
+        import: VMTableImport,
+    ) {
+        unsafe {
+            let offset = self.offsets.runtime_table(idx);
+            let storage = self.vmctx_plus_offset_mut::<VMTableImport>(offset);
             *storage = import;
         }
     }

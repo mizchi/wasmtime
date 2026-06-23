@@ -48,7 +48,7 @@
 
 use crate::component::*;
 use crate::prelude::*;
-use crate::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, Trap, WasmValType};
+use crate::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmValType};
 use cranelift_entity::packed_option::PackedOption;
 use serde_derive::{Deserialize, Serialize};
 
@@ -841,6 +841,16 @@ pub enum Trampoline {
         instance: RuntimeComponentInstanceIndex,
     },
 
+    /// A `thread.yield` intrinsic, which yields control to the host so that other
+    /// tasks are able to make progress, if any.
+    ThreadYield {
+        /// The specific component instance which is calling the intrinsic.
+        instance: RuntimeComponentInstanceIndex,
+        /// If `true`, indicates the caller instance may receive notification
+        /// of task cancellation.
+        cancellable: bool,
+    },
+
     /// A `subtask.drop` intrinsic to drop a specified task which has completed.
     SubtaskDrop {
         /// The specific component instance which is calling the intrinsic.
@@ -1097,9 +1107,9 @@ pub enum Trampoline {
     /// component does not invalidate the handle in the original component.
     ErrorContextTransfer,
 
-    /// An intrinsic used by FACT-generated modules to trap with the specified
+    /// An intrinsic used by FACT-generated modules to trap with a specified
     /// code.
-    Trap(Trap),
+    Trap,
 
     /// An intrinsic used by FACT-generated modules to push a task onto the
     /// stack for a sync-to-sync, guest-to-guest call.
@@ -1109,9 +1119,16 @@ pub enum Trampoline {
     ExitSyncCall,
 
     /// Intrinsic used to implement the `thread.index` component model builtin.
-    ThreadIndex {
+    ThreadIndex,
+
+    /// Intrinsic used to implement the `thread.spawn-ref` component model builtin.
+    ThreadSpawnRef {
         /// The specific component instance which is calling the intrinsic.
         instance: RuntimeComponentInstanceIndex,
+        /// Whether this is the shared/preemptive canonical form.
+        shared: bool,
+        /// The type index for the start function of the thread.
+        start_func_ty_idx: ComponentTypeIndex,
     },
 
     /// Intrinsic used to implement the `thread.new-indirect` component model builtin.
@@ -1124,11 +1141,40 @@ pub enum Trampoline {
         start_func_table_idx: RuntimeTableIndex,
     },
 
-    /// Intrinsic used to implement the `thread.resume-later` component model
-    /// builtin.
-    ThreadResumeLater {
+    /// Intrinsic used to implement the `thread.spawn-indirect` component model builtin.
+    ThreadSpawnIndirect {
         /// The specific component instance which is calling the intrinsic.
         instance: RuntimeComponentInstanceIndex,
+        /// Whether this is the shared/preemptive canonical form.
+        shared: bool,
+        /// The type index for the start function of the thread.
+        start_func_ty_idx: ComponentTypeIndex,
+        /// The index of the table that stores the start function.
+        start_func_table_idx: RuntimeTableIndex,
+    },
+
+    /// Intrinsic used to implement the `thread.available_parallelism` component model builtin.
+    ThreadAvailableParallelism {
+        /// Whether this query is for shared/preemptive parallelism.
+        shared: bool,
+    },
+
+    /// Intrinsic used to implement the `thread.suspend-to-suspended` component model builtin.
+    ThreadSuspendToSuspended {
+        /// The specific component instance which is calling the intrinsic.
+        instance: RuntimeComponentInstanceIndex,
+        /// If `true`, indicates the caller instance may receive notification
+        /// of task cancellation.
+        cancellable: bool,
+    },
+
+    /// Intrinsic used to implement the `thread.suspend-to` component model builtin.
+    ThreadSuspendTo {
+        /// The specific component instance which is calling the intrinsic.
+        instance: RuntimeComponentInstanceIndex,
+        /// If `true`, indicates the caller instance may receive notification
+        /// of task cancellation.
+        cancellable: bool,
     },
 
     /// Intrinsic used to implement the `thread.suspend` component model builtin.
@@ -1140,49 +1186,14 @@ pub enum Trampoline {
         cancellable: bool,
     },
 
-    /// A `thread.yield` intrinsic, which yields control to the host so that other
-    /// tasks are able to make progress, if any.
-    ThreadYield {
+    /// Intrinsic used to implement the `thread.unsuspend` component model builtin.
+    ThreadUnsuspend {
         /// The specific component instance which is calling the intrinsic.
         instance: RuntimeComponentInstanceIndex,
-        /// If `true`, indicates the caller instance may receive notification
-        /// of task cancellation.
-        cancellable: bool,
     },
 
-    /// Intrinsic used to implement the `thread.suspend-then-resume` component
-    /// model builtin.
-    ThreadSuspendThenResume {
-        /// The specific component instance which is calling the intrinsic.
-        instance: RuntimeComponentInstanceIndex,
-        /// If `true`, indicates the caller instance may receive notification
-        /// of task cancellation.
-        cancellable: bool,
-    },
-
-    /// Intrinsic used to implement the `thread.yield-then-resume` component
-    /// model builtin.
-    ThreadYieldThenResume {
-        /// The specific component instance which is calling the intrinsic.
-        instance: RuntimeComponentInstanceIndex,
-        /// If `true`, indicates the caller instance may receive notification
-        /// of task cancellation.
-        cancellable: bool,
-    },
-
-    /// Intrinsic used to implement the `thread.suspend-then-promote` component
-    /// model builtin.
-    ThreadSuspendThenPromote {
-        /// The specific component instance which is calling the intrinsic.
-        instance: RuntimeComponentInstanceIndex,
-        /// If `true`, indicates the caller instance may receive notification
-        /// of task cancellation.
-        cancellable: bool,
-    },
-
-    /// Intrinsic used to implement the `thread.yield-then-promote` component
-    /// model builtin.
-    ThreadYieldThenPromote {
+    /// Intrinsic used to implement the `thread.yield-to-suspended` component model builtin.
+    ThreadYieldToSuspended {
         /// The specific component instance which is calling the intrinsic.
         instance: RuntimeComponentInstanceIndex,
         /// If `true`, indicates the caller instance may receive notification
@@ -1220,6 +1231,7 @@ impl Trampoline {
             WaitableSetPoll { .. } => format!("waitable-set-poll"),
             WaitableSetDrop { .. } => format!("waitable-set-drop"),
             WaitableJoin { .. } => format!("waitable-join"),
+            ThreadYield { .. } => format!("thread-yield"),
             SubtaskDrop { .. } => format!("subtask-drop"),
             SubtaskCancel { .. } => format!("subtask-cancel"),
             StreamNew { .. } => format!("stream-new"),
@@ -1247,18 +1259,19 @@ impl Trampoline {
             FutureTransfer => format!("future-transfer"),
             StreamTransfer => format!("stream-transfer"),
             ErrorContextTransfer => format!("error-context-transfer"),
-            Trap(trap) => format!("trap-{}", *trap as u8),
+            Trap => format!("trap"),
             EnterSyncCall => format!("enter-sync-call"),
             ExitSyncCall => format!("exit-sync-call"),
-            ThreadIndex { .. } => format!("thread-index"),
+            ThreadIndex => format!("thread-index"),
+            ThreadSpawnRef { .. } => format!("thread-spawn-ref"),
             ThreadNewIndirect { .. } => format!("thread-new-indirect"),
-            ThreadResumeLater { .. } => format!("thread-resume-later"),
+            ThreadSpawnIndirect { .. } => format!("thread-spawn-indirect"),
+            ThreadAvailableParallelism { .. } => format!("thread-available-parallelism"),
+            ThreadSuspendToSuspended { .. } => format!("thread-suspend-to-suspended"),
+            ThreadSuspendTo { .. } => format!("thread-suspend-to"),
             ThreadSuspend { .. } => format!("thread-suspend"),
-            ThreadYield { .. } => format!("thread-yield"),
-            ThreadSuspendThenResume { .. } => format!("thread-suspend-then-resume"),
-            ThreadYieldThenResume { .. } => format!("thread-yield-then-resume"),
-            ThreadSuspendThenPromote { .. } => format!("thread-suspend-then-promote"),
-            ThreadYieldThenPromote { .. } => format!("thread-yield-then-promote"),
+            ThreadUnsuspend { .. } => format!("thread-unsuspend"),
+            ThreadYieldToSuspended { .. } => format!("thread-yield-to-suspended"),
         }
     }
 }

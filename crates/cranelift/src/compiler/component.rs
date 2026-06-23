@@ -10,14 +10,14 @@ use crate::{
 };
 use cranelift_codegen::cursor::FuncCursor;
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{self, InstBuilder, Value};
+use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData, Value};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::FunctionBuilder;
 use wasmtime_environ::GetPtrSize;
 use wasmtime_environ::error::{Result, bail};
 use wasmtime_environ::{
     Abi, BuiltinFunctionIndex, CompiledFunctionBody, EntityRef, FuncKey, HostCall, PanicOnOom as _,
-    TrapSentinel, Tunables, WasmFuncType, WasmValType, component::*,
+    PtrSize, TrapSentinel, Tunables, WasmFuncType, WasmValType, component::*,
     fact::PREPARE_CALL_FIXED_PARAMS,
 };
 
@@ -27,6 +27,7 @@ struct TrampolineCompiler<'a> {
     builder: FunctionBuilder<'a>,
     component: &'a Component,
     types: &'a ComponentTypesBuilder,
+    offsets: VMComponentOffsets<u8>,
     block0: ir::Block,
     signature: &'a WasmFuncType,
     builtins: BuiltinFunctions,
@@ -121,6 +122,7 @@ impl<'a> TrampolineCompiler<'a> {
             builder,
             component,
             types,
+            offsets,
             block0,
             signature,
             builtins: BuiltinFunctions::new(compiler),
@@ -155,10 +157,11 @@ impl<'a> TrampolineCompiler<'a> {
                     WasmArgs::ValRawList,
                     |me, params| {
                         let vmctx = params[0];
-                        let lowering_data = me
-                            .alias_regions
-                            .vmcomponent_lowering_data(*index)
-                            .load(&mut me.builder.cursor(), vmctx);
+                        let lowering_data = me.alias_regions.vmcomponent_lowering_data(
+                            &mut me.builder.cursor(),
+                            vmctx,
+                            *index,
+                        );
                         params.extend([
                             lowering_data,
                             me.index_value(*lower_ty),
@@ -293,6 +296,24 @@ impl<'a> TrampolineCompiler<'a> {
                     WasmArgs::InRegisters,
                     |me, params| {
                         params.push(me.index_value(*instance));
+                    },
+                );
+            }
+            Trampoline::ThreadYield {
+                instance,
+                cancellable,
+            } => {
+                self.translate_libcall(
+                    host::thread_yield,
+                    TrapSentinel::NegativeOne,
+                    WasmArgs::InRegisters,
+                    |me, params| {
+                        params.push(me.index_value(*instance));
+                        params.push(
+                            me.builder
+                                .ins()
+                                .iconst(ir::types::I8, i64::from(*cancellable)),
+                        );
                     },
                 );
             }
@@ -626,7 +647,6 @@ impl<'a> TrampolineCompiler<'a> {
             Trampoline::SyncStartCall { callback } => {
                 let pointer_type = self.isa.pointer_type();
                 let (values_vec_ptr, len) = self.compiler.allocate_stack_array_and_spill_args(
-                    &mut self.alias_regions,
                     &WasmFuncType::new([], self.signature.results().iter().copied()).panic_on_oom(),
                     &mut self.builder,
                     &[],
@@ -688,10 +708,13 @@ impl<'a> TrampolineCompiler<'a> {
                     |_, _| {},
                 );
             }
-            Trampoline::Trap(code) => {
-                let code = crate::env_trap_to_clif_trap(*code);
-                let (mut traps, builder) = self.traps();
-                traps.trap(builder, code);
+            Trampoline::Trap => {
+                self.translate_libcall(
+                    host::trap,
+                    TrapSentinel::Falsy,
+                    WasmArgs::InRegisters,
+                    |_, _| {},
+                );
             }
             Trampoline::EnterSyncCall => {
                 self.translate_libcall(
@@ -709,12 +732,28 @@ impl<'a> TrampolineCompiler<'a> {
                     |_, _| {},
                 );
             }
-            Trampoline::ThreadIndex { .. } => {
+            Trampoline::ThreadIndex => {
                 self.translate_libcall(
                     host::thread_index,
                     TrapSentinel::NegativeOne,
                     WasmArgs::InRegisters,
                     |_, _| {},
+                );
+            }
+            Trampoline::ThreadSpawnRef {
+                instance,
+                shared,
+                start_func_ty_idx,
+            } => {
+                self.translate_libcall(
+                    host::thread_spawn_ref,
+                    TrapSentinel::NegativeOne,
+                    WasmArgs::InRegisters,
+                    |me, params| {
+                        params.push(me.index_value(*instance));
+                        params.push(me.bool_value(*shared));
+                        params.push(me.index_value(*start_func_ty_idx));
+                    },
                 );
             }
             Trampoline::ThreadNewIndirect {
@@ -733,13 +772,67 @@ impl<'a> TrampolineCompiler<'a> {
                     },
                 );
             }
-            Trampoline::ThreadResumeLater { instance } => {
+            Trampoline::ThreadSpawnIndirect {
+                instance,
+                shared,
+                start_func_table_idx,
+                start_func_ty_idx,
+            } => {
                 self.translate_libcall(
-                    host::thread_resume_later,
-                    TrapSentinel::Falsy,
+                    host::thread_spawn_indirect,
+                    TrapSentinel::NegativeOne,
                     WasmArgs::InRegisters,
                     |me, params| {
                         params.push(me.index_value(*instance));
+                        params.push(me.bool_value(*shared));
+                        params.push(me.index_value(*start_func_ty_idx));
+                        params.push(me.index_value(*start_func_table_idx));
+                    },
+                );
+            }
+            Trampoline::ThreadAvailableParallelism { shared } => {
+                self.translate_libcall(
+                    host::thread_available_parallelism,
+                    TrapSentinel::NegativeOne,
+                    WasmArgs::InRegisters,
+                    |me, params| {
+                        params.push(me.bool_value(*shared));
+                    },
+                );
+            }
+            Trampoline::ThreadSuspendToSuspended {
+                instance,
+                cancellable,
+            } => {
+                self.translate_libcall(
+                    host::thread_suspend_to_suspended,
+                    TrapSentinel::NegativeOne,
+                    WasmArgs::InRegisters,
+                    |me, params| {
+                        params.push(me.index_value(*instance));
+                        params.push(
+                            me.builder
+                                .ins()
+                                .iconst(ir::types::I8, i64::from(*cancellable)),
+                        );
+                    },
+                );
+            }
+            Trampoline::ThreadSuspendTo {
+                instance,
+                cancellable,
+            } => {
+                self.translate_libcall(
+                    host::thread_suspend_to,
+                    TrapSentinel::NegativeOne,
+                    WasmArgs::InRegisters,
+                    |me, params| {
+                        params.push(me.index_value(*instance));
+                        params.push(
+                            me.builder
+                                .ins()
+                                .iconst(ir::types::I8, i64::from(*cancellable)),
+                        );
                     },
                 );
             }
@@ -761,84 +854,22 @@ impl<'a> TrampolineCompiler<'a> {
                     },
                 );
             }
-            Trampoline::ThreadYield {
-                instance,
-                cancellable,
-            } => {
+            Trampoline::ThreadUnsuspend { instance } => {
                 self.translate_libcall(
-                    host::thread_yield,
-                    TrapSentinel::NegativeOne,
+                    host::thread_unsuspend,
+                    TrapSentinel::Falsy,
                     WasmArgs::InRegisters,
                     |me, params| {
                         params.push(me.index_value(*instance));
-                        params.push(
-                            me.builder
-                                .ins()
-                                .iconst(ir::types::I8, i64::from(*cancellable)),
-                        );
                     },
                 );
             }
-            Trampoline::ThreadSuspendThenResume {
+            Trampoline::ThreadYieldToSuspended {
                 instance,
                 cancellable,
             } => {
                 self.translate_libcall(
-                    host::thread_suspend_then_resume,
-                    TrapSentinel::NegativeOne,
-                    WasmArgs::InRegisters,
-                    |me, params| {
-                        params.push(me.index_value(*instance));
-                        params.push(
-                            me.builder
-                                .ins()
-                                .iconst(ir::types::I8, i64::from(*cancellable)),
-                        );
-                    },
-                );
-            }
-            Trampoline::ThreadYieldThenResume {
-                instance,
-                cancellable,
-            } => {
-                self.translate_libcall(
-                    host::thread_yield_then_resume,
-                    TrapSentinel::NegativeOne,
-                    WasmArgs::InRegisters,
-                    |me, params| {
-                        params.push(me.index_value(*instance));
-                        params.push(
-                            me.builder
-                                .ins()
-                                .iconst(ir::types::I8, i64::from(*cancellable)),
-                        );
-                    },
-                );
-            }
-            Trampoline::ThreadSuspendThenPromote {
-                instance,
-                cancellable,
-            } => {
-                self.translate_libcall(
-                    host::thread_suspend_then_promote,
-                    TrapSentinel::NegativeOne,
-                    WasmArgs::InRegisters,
-                    |me, params| {
-                        params.push(me.index_value(*instance));
-                        params.push(
-                            me.builder
-                                .ins()
-                                .iconst(ir::types::I8, i64::from(*cancellable)),
-                        );
-                    },
-                );
-            }
-            Trampoline::ThreadYieldThenPromote {
-                instance,
-                cancellable,
-            } => {
-                self.translate_libcall(
-                    host::thread_yield_then_promote,
+                    host::thread_yield_to_suspended,
                     TrapSentinel::NegativeOne,
                     WasmArgs::InRegisters,
                     |me, params| {
@@ -892,7 +923,6 @@ impl<'a> TrampolineCompiler<'a> {
         let pointer_type = self.isa.pointer_type();
 
         let (ptr, len) = self.compiler.allocate_stack_array_and_spill_args(
-            &mut self.alias_regions,
             self.signature,
             &mut self.builder,
             args,
@@ -969,7 +999,6 @@ impl<'a> TrampolineCompiler<'a> {
             // A mixture of the above two.
             WasmArgs::InRegistersUpTo(n) => {
                 let (values_vec_ptr, len) = self.compiler.allocate_stack_array_and_spill_args(
-                    &mut self.alias_regions,
                     &WasmFuncType::new(self.signature.params().iter().skip(n).copied(), [])
                         .panic_on_oom(),
                     &mut self.builder,
@@ -989,10 +1018,11 @@ impl<'a> TrampolineCompiler<'a> {
             HostCallee::Lowering(index) => {
                 // Load host function pointer from the vmcontext and then call that
                 // indirect function pointer with the list of arguments.
-                let host_fn = self
-                    .alias_regions
-                    .vmcomponent_lowering_callee(index)
-                    .load(&mut self.builder.cursor(), vmctx);
+                let host_fn = self.alias_regions.vmcomponent_lowering_callee(
+                    &mut self.builder.cursor(),
+                    vmctx,
+                    index,
+                );
                 let host_sig = {
                     let mut sig = ir::Signature::new(CallConv::triple_default(self.isa.triple()));
                     for param in host_args.iter() {
@@ -1048,7 +1078,6 @@ impl<'a> TrampolineCompiler<'a> {
                 let len = len.or(val_raw_len).unwrap();
                 self.raise_if_host_trapped(result.unwrap());
                 let results = self.compiler.load_values_from_array(
-                    &mut self.alias_regions,
                     self.signature.results(),
                     &mut self.builder,
                     ptr,
@@ -1065,6 +1094,12 @@ impl<'a> TrampolineCompiler<'a> {
             .iconst(ir::types::I32, i64::try_from(index.index()).unwrap())
     }
 
+    fn bool_value(&mut self, value: bool) -> ir::Value {
+        self.builder
+            .ins()
+            .iconst(ir::types::I32, if value { 1 } else { 0 })
+    }
+
     fn translate_resource_drop(
         &mut self,
         instance: RuntimeComponentInstanceIndex,
@@ -1073,6 +1108,7 @@ impl<'a> TrampolineCompiler<'a> {
         let args = self.abi_load_params();
         let vmctx = args[0];
         let caller_vmctx = args[1];
+        let pointer_type = self.isa.pointer_type();
 
         // The arguments this shim passes along to the libcall are:
         //
@@ -1127,8 +1163,9 @@ impl<'a> TrampolineCompiler<'a> {
         //    run_destructor_block:
         //      ;; test may_leave, but only if the component instances
         //      ;; differ
-        //      may_leave = load.i32 vmctx+$instance_flags_offset
-        //      trapz may_leave, $TRAP_CANNOT_LEAVE_COMPONENT
+        //      flags = load.i32 vmctx+$instance_flags_offset
+        //      masked = band flags, $FLAG_MAY_LEAVE
+        //      trapz masked, $TRAP_CANNOT_LEAVE_COMPONENT
         //
         //      ;; set may_block to false, saving the old value to restore
         //      ;; later, but only if the component instances differ and
@@ -1204,12 +1241,9 @@ impl<'a> TrampolineCompiler<'a> {
                     // Stash the old value of `may_block` and then set it to false.
                     let old_may_block = self
                         .alias_regions
-                        .vmcomponent()
-                        .task_may_block()
-                        .readonly()
-                        .load(&mut self.builder.cursor(), vmctx);
+                        .vmcomponent_task_may_block(&mut self.builder.cursor(), vmctx);
                     let zero = self.builder.ins().iconst(ir::types::I32, i64::from(0));
-                    self.alias_regions.vmcomponent().task_may_block().store(
+                    self.alias_regions.store_vmcomponent_task_may_block(
                         &mut self.builder.cursor(),
                         vmctx,
                         zero,
@@ -1252,25 +1286,27 @@ impl<'a> TrampolineCompiler<'a> {
             // NB: despite the vmcontext storing nullable funcrefs for function
             // pointers we know this is statically never null due to the
             // `has_destructor` check above.
-            let dtor_func_ref = self
-                .alias_regions
-                .vmcomponent()
-                .resource_destructors(index)
-                .load(&mut self.builder.cursor(), vmctx);
+            let dtor_func_ref = self.alias_regions.vmcomponent_resource_destructor(
+                &mut self.builder.cursor(),
+                vmctx,
+                index,
+            );
             if self.compiler.emit_debug_checks {
                 self.builder
                     .ins()
                     .trapz(dtor_func_ref, TRAP_INTERNAL_ASSERT);
             }
-            let func_addr = self.alias_regions.vmfuncref_wasm_call(
-                &mut self.builder.cursor(),
+            let func_addr = self.builder.ins().load(
+                pointer_type,
                 trusted,
                 dtor_func_ref,
+                i32::from(self.offsets.ptr.vm_func_ref_wasm_call()),
             );
-            let callee_vmctx = self.alias_regions.vmfuncref_vmctx(
-                &mut self.builder.cursor(),
+            let callee_vmctx = self.builder.ins().load(
+                pointer_type,
                 trusted,
                 dtor_func_ref,
+                i32::from(self.offsets.ptr.vm_func_ref_vmctx()),
             );
 
             let sig = crate::wasm_call_signature(self.isa, self.signature, &self.compiler.tunables);
@@ -1324,7 +1360,7 @@ impl<'a> TrampolineCompiler<'a> {
             self.raise_if_host_trapped(result.unwrap());
 
             // Restore the old value of `may_block`
-            self.alias_regions.vmcomponent().task_may_block().store(
+            self.alias_regions.store_vmcomponent_task_may_block(
                 &mut self.builder.cursor(),
                 vmctx,
                 old_may_block,
@@ -1352,9 +1388,7 @@ impl<'a> TrampolineCompiler<'a> {
 
     fn load_memory(&mut self, vmctx: ir::Value, memory: RuntimeMemoryIndex) -> ir::Value {
         self.alias_regions
-            .vmcomponent()
-            .memories(memory)
-            .load(&mut self.builder.cursor(), vmctx)
+            .vmcomponent_runtime_memory(&mut self.builder.cursor(), vmctx, memory)
     }
 
     fn load_callback(
@@ -1364,11 +1398,11 @@ impl<'a> TrampolineCompiler<'a> {
     ) -> ir::Value {
         let pointer_type = self.isa.pointer_type();
         match callback {
-            Some(idx) => self
-                .alias_regions
-                .vmcomponent()
-                .callbacks(idx)
-                .load(&mut self.builder.cursor(), vmctx),
+            Some(idx) => self.alias_regions.vmcomponent_runtime_callback(
+                &mut self.builder.cursor(),
+                vmctx,
+                idx,
+            ),
             None => self.builder.ins().iconst(pointer_type, 0),
         }
     }
@@ -1380,11 +1414,11 @@ impl<'a> TrampolineCompiler<'a> {
     ) -> ir::Value {
         let pointer_type = self.isa.pointer_type();
         match post_return {
-            Some(idx) => self
-                .alias_regions
-                .vmcomponent()
-                .post_returns(idx)
-                .load(&mut self.builder.cursor(), vmctx),
+            Some(idx) => self.alias_regions.vmcomponent_runtime_post_return(
+                &mut self.builder.cursor(),
+                vmctx,
+                idx,
+            ),
             None => self.builder.ins().iconst(pointer_type, 0),
         }
     }
@@ -1398,20 +1432,19 @@ impl<'a> TrampolineCompiler<'a> {
         vmctx: ir::Value,
         index: ComponentBuiltinFunctionIndex,
     ) -> ir::Value {
+        let pointer_type = self.isa.pointer_type();
         // First load the pointer to the builtins structure which is static
         // per-process.
         let builtins_array = self
             .alias_regions
-            .vmcomponent()
-            .builtins()
-            .load(&mut self.builder.cursor(), vmctx);
+            .vmcomponent_builtins(&mut self.builder.cursor(), vmctx);
         // Next load the function pointer at `offset` and return that.
-        self.alias_regions
-            .component_builtin_functions_array_element(
-                &mut self.builder.cursor(),
-                builtins_array,
-                index,
-            )
+        self.builder.ins().load(
+            pointer_type,
+            MemFlagsData::trusted().with_readonly(),
+            builtins_array,
+            i32::try_from(index.index() * u32::from(self.offsets.ptr.size())).unwrap(),
+        )
     }
 
     /// Get a function's parameters regardless of the ABI in use.
@@ -1480,6 +1513,8 @@ impl<'a> TrampolineCompiler<'a> {
         let instance = match trampoline {
             // These intrinsics explicitly do not check the may-leave flag.
             Trampoline::ResourceRep { .. }
+            | Trampoline::ThreadIndex
+            | Trampoline::ThreadAvailableParallelism { .. }
             | Trampoline::BackpressureInc { .. }
             | Trampoline::BackpressureDec { .. } => return,
 
@@ -1493,7 +1528,7 @@ impl<'a> TrampolineCompiler<'a> {
             | Trampoline::FutureTransfer
             | Trampoline::StreamTransfer
             | Trampoline::ErrorContextTransfer
-            | Trampoline::Trap(_)
+            | Trampoline::Trap
             | Trampoline::EnterSyncCall
             | Trampoline::ExitSyncCall
             | Trampoline::Transcoder { .. } => return,
@@ -1509,15 +1544,15 @@ impl<'a> TrampolineCompiler<'a> {
             | Trampoline::WaitableSetPoll { instance, .. }
             | Trampoline::WaitableSetDrop { instance }
             | Trampoline::WaitableJoin { instance }
-            | Trampoline::ThreadIndex { instance }
-            | Trampoline::ThreadNewIndirect { instance, .. }
-            | Trampoline::ThreadResumeLater { instance, .. }
-            | Trampoline::ThreadSuspend { instance, .. }
             | Trampoline::ThreadYield { instance, .. }
-            | Trampoline::ThreadSuspendThenResume { instance, .. }
-            | Trampoline::ThreadYieldThenResume { instance, .. }
-            | Trampoline::ThreadSuspendThenPromote { instance, .. }
-            | Trampoline::ThreadYieldThenPromote { instance, .. }
+            | Trampoline::ThreadSpawnRef { instance, .. }
+            | Trampoline::ThreadNewIndirect { instance, .. }
+            | Trampoline::ThreadSpawnIndirect { instance, .. }
+            | Trampoline::ThreadSuspend { instance, .. }
+            | Trampoline::ThreadSuspendToSuspended { instance, .. }
+            | Trampoline::ThreadSuspendTo { instance, .. }
+            | Trampoline::ThreadUnsuspend { instance, .. }
+            | Trampoline::ThreadYieldToSuspended { instance, .. }
             | Trampoline::SubtaskDrop { instance }
             | Trampoline::SubtaskCancel { instance, .. }
             | Trampoline::ErrorContextNew { instance, .. }
@@ -1545,13 +1580,17 @@ impl<'a> TrampolineCompiler<'a> {
     fn check_may_leave_instance(&mut self, instance: RuntimeComponentInstanceIndex) {
         let vmctx = self.builder.func.dfg.block_params(self.block0)[0];
 
-        let may_leave = self
-            .alias_regions
-            .vmcomponent()
-            .may_leave(instance)
-            .load(&mut self.builder.cursor(), vmctx);
+        let flags = self.alias_regions.vmcomponent_instance_flags(
+            &mut self.builder.cursor(),
+            vmctx,
+            instance,
+        );
+        let may_leave_bit = self
+            .builder
+            .ins()
+            .band_imm_u(flags, i64::from(FLAG_MAY_LEAVE));
         let (mut traps, builder) = self.traps();
-        traps.trapz(builder, may_leave, TRAP_CANNOT_LEAVE_COMPONENT);
+        traps.trapz(builder, may_leave_bit, TRAP_CANNOT_LEAVE_COMPONENT);
     }
 
     fn traps(
@@ -1583,9 +1622,7 @@ impl<'a> TrampolineCompiler<'a> {
     fn load_vm_store_context(&mut self) -> ir::Value {
         let caller_vmctx = self.abi_load_params()[1];
         self.alias_regions
-            .vmctx()
-            .store_context()
-            .load(&mut self.builder.cursor(), caller_vmctx)
+            .vmctx_store_context(&mut self.builder.cursor(), caller_vmctx)
     }
 }
 
@@ -1685,7 +1722,8 @@ impl ComponentCompiler for Compiler {
     ) -> Result<CompiledFunctionBody> {
         let (abi2, trampoline_index) = key.unwrap_component_trampoline();
         debug_assert_eq!(abi, abi2);
-        let sig = types[component.component.trampolines[trampoline_index]].unwrap_func();
+        let sig = types[component.component.trampolines[trampoline_index]]
+            .unwrap_func_shared_or_unshared();
 
         match abi {
             // Fall through to the trampoline compiler.
@@ -1694,17 +1732,23 @@ impl ComponentCompiler for Compiler {
             // Implement the array-abi trampoline in terms of calling the
             // wasm-abi trampoline.
             Abi::Array => {
+                let offsets =
+                    VMComponentOffsets::new(self.isa.pointer_bytes(), &component.component);
                 return Ok(self.array_to_wasm_trampoline(
                     key,
                     FuncKey::ComponentTrampoline(Abi::Wasm, trampoline_index),
                     sig,
                     symbol,
                     wasmtime_environ::component::VMCOMPONENT_MAGIC,
-                    |alias_regions, _pointer_type, cursor, vmctx| {
-                        alias_regions
-                            .vmcomponent()
-                            .store_context()
-                            .load(cursor, vmctx)
+                    |_alias_regions, pointer_type, cursor, vmctx| {
+                        // TODO: `VMComponentContext` doesn't have its own alias
+                        // region or helpers yet.
+                        cursor.ins().load(
+                            pointer_type,
+                            ir::MemFlagsData::trusted().with_readonly().with_can_move(),
+                            vmctx,
+                            i32::try_from(offsets.vm_store_context()).unwrap(),
+                        )
                     },
                 )?);
             }
@@ -1740,9 +1784,6 @@ impl ComponentCompiler for Compiler {
 
         c.translate(&component.trampolines[trampoline_index]);
         c.builder.finalize(c.isa.frontend_config());
-        crate::alias_region::debug_assert_all_mem_insts_have_alias_regions(
-            &compiler.cx.codegen_context.func,
-        );
         compiler.cx.abi = Some(abi);
 
         Ok(CompiledFunctionBody {
@@ -1773,17 +1814,23 @@ impl ComponentCompiler for Compiler {
             // Implement the array-abi trampoline in terms of calling the
             // wasm-abi trampoline.
             Abi::Array => {
+                let offsets =
+                    VMComponentOffsets::new(self.isa.pointer_bytes(), &component.component);
                 return Ok(self.array_to_wasm_trampoline(
                     FuncKey::UnsafeIntrinsic(abi, intrinsic),
                     FuncKey::UnsafeIntrinsic(Abi::Wasm, intrinsic),
                     &wasm_func_ty,
                     symbol,
                     wasmtime_environ::component::VMCOMPONENT_MAGIC,
-                    |alias_regions, _pointer_type, cursor, vmctx| {
-                        alias_regions
-                            .vmcomponent()
-                            .store_context()
-                            .load(cursor, vmctx)
+                    |_alias_regions, pointer_type, cursor, vmctx| {
+                        // TODO: `VMComponentContext` doesn't have its own alias
+                        // region or helpers yet.
+                        cursor.ins().load(
+                            pointer_type,
+                            ir::MemFlagsData::trusted().with_readonly().with_can_move(),
+                            vmctx,
+                            i32::try_from(offsets.vm_store_context()).unwrap(),
+                        )
                     },
                 )?);
             }
@@ -1825,9 +1872,6 @@ impl ComponentCompiler for Compiler {
         }
 
         c.builder.finalize(c.isa.frontend_config());
-        crate::alias_region::debug_assert_all_mem_insts_have_alias_regions(
-            &compiler.cx.codegen_context.func,
-        );
         compiler.cx.abi = Some(abi);
 
         Ok(CompiledFunctionBody {
@@ -1945,7 +1989,6 @@ impl TrampolineCompiler<'_> {
                 args.push(self.len_param(4, to64));
             }
         };
-        let mut retptr_slot = None;
         if uses_retptr {
             let slot = self
                 .builder
@@ -1955,18 +1998,14 @@ impl TrampolineCompiler<'_> {
                     pointer_type.bytes(),
                     0,
                 ));
-            retptr_slot = Some(slot);
             args.push(self.builder.ins().stack_addr(pointer_type, slot, 0));
         }
         let call = self.call_libcall(vmctx, get_libcall, &args);
         let mut results = self.builder.func.dfg.inst_results(call).to_vec();
-        if let Some(slot) = retptr_slot {
-            let region = self
-                .alias_regions
-                .stack_slot_region(self.builder.func, slot);
+        if uses_retptr {
             results.push(self.builder.ins().load(
                 pointer_type,
-                ir::MemFlagsData::trusted().with_alias_region(Some(region)),
+                ir::MemFlagsData::trusted(),
                 *args.last().unwrap(),
                 0,
             ));
@@ -2051,9 +2090,7 @@ impl TrampolineCompiler<'_> {
     fn load_runtime_memory_base(&mut self, vmctx: ir::Value, mem: RuntimeMemoryIndex) -> ir::Value {
         let from_vmmemory_definition = self.load_memory(vmctx, mem);
         self.alias_regions
-            .vm_memory_definition()
-            .base()
-            .load(&mut self.builder.cursor(), from_vmmemory_definition)
+            .vmmemory_definition_base(&mut self.builder.cursor(), from_vmmemory_definition)
     }
 }
 
@@ -2183,12 +2220,10 @@ where
         };
 
         // Do the load!
-        let mut value = self.traps.alias_regions().unsafe_intrinsic_load(
-            &mut self.builder.cursor(),
-            clif_ty,
-            ir::MemFlagsData::trusted(),
-            pointer,
-        );
+        let mut value = self
+            .builder
+            .ins()
+            .load(clif_ty, ir::MemFlagsData::trusted(), pointer, 0);
 
         // Extend the value, if necessary. When implementing the
         // `u8-native-load` intrinsic, for example, we will load a Cranelift
@@ -2239,12 +2274,9 @@ where
         }
 
         // Do the store!
-        self.traps.alias_regions().unsafe_intrinsic_store(
-            &mut self.builder.cursor(),
-            ir::MemFlagsData::trusted(),
-            value,
-            pointer,
-        );
+        self.builder
+            .ins()
+            .store(ir::MemFlagsData::trusted(), value, pointer, 0);
 
         Ok(())
     }
@@ -2280,12 +2312,10 @@ where
         )?;
 
         // Do the load!
-        let mut value = self.traps.alias_regions().unsafe_intrinsic_load(
-            &mut self.builder.cursor(),
-            clif_ty,
-            ir::MemFlagsData::trusted(),
-            addr,
-        );
+        let mut value = self
+            .builder
+            .ins()
+            .load(clif_ty, ir::MemFlagsData::trusted(), addr, 0);
 
         // Zero-extend the loaded value to the Wasm result type, if necessary.
         let wasm_clif_ty = crate::value_type(self.isa, wasm_ty);
@@ -2348,12 +2378,9 @@ where
         }
 
         // Do the store!
-        self.traps.alias_regions().unsafe_intrinsic_store(
-            &mut self.builder.cursor(),
-            ir::MemFlagsData::trusted(),
-            value,
-            addr,
-        );
+        self.builder
+            .ins()
+            .store(ir::MemFlagsData::trusted(), value, addr, 0);
 
         Ok(())
     }
@@ -2421,9 +2448,7 @@ where
         let caller_vmctx = params[1];
         self.traps
             .alias_regions()
-            .vmctx()
-            .store_context()
-            .load(&mut self.builder.cursor(), caller_vmctx)
+            .vmctx_store_context(&mut self.builder.cursor(), caller_vmctx)
     }
 }
 

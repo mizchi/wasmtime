@@ -2732,7 +2732,7 @@ pub fn translate_operator(
             environ.stacks.push1(r);
         }
 
-        Operator::RefI31 => {
+        Operator::RefI31 | Operator::RefI31Shared { .. } => {
             let val = environ.stacks.pop1();
             let i31ref = environ.translate_ref_i31(builder.cursor(), val)?;
             environ.stacks.push1(i31ref);
@@ -3395,8 +3395,7 @@ pub fn translate_operator(
         | Operator::ArrayAtomicRmwXor { .. }
         | Operator::ArrayAtomicRmwAnd { .. }
         | Operator::ArrayAtomicRmwXchg { .. }
-        | Operator::ArrayAtomicRmwCmpxchg { .. }
-        | Operator::RefI31Shared { .. } => {
+        | Operator::ArrayAtomicRmwCmpxchg { .. } => {
             return Err(wasm_unsupported!(
                 "shared-everything-threads operators are not yet implemented"
             ));

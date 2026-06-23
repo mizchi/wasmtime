@@ -1508,7 +1508,7 @@ impl ExternType {
                         engine,
                         subty.is_final,
                         subty.supertype,
-                        subty.unwrap_func().clone_panic_on_oom(),
+                        subty.unwrap_func_shared_or_unshared().clone_panic_on_oom(),
                     )
                     .panic_on_oom()
                     .into()
@@ -2553,7 +2553,7 @@ impl FuncType {
     pub fn param(&self, i: usize) -> Option<ValType> {
         let engine = self.engine();
         self.registered_type
-            .unwrap_func()
+            .unwrap_func_shared_or_unshared()
             .params()
             .get(i)
             .map(|ty| ValType::from_wasm_type(engine, ty))
@@ -2564,7 +2564,7 @@ impl FuncType {
     pub fn params(&self) -> impl ExactSizeIterator<Item = ValType> + '_ {
         let engine = self.engine();
         self.registered_type
-            .unwrap_func()
+            .unwrap_func_shared_or_unshared()
             .params()
             .iter()
             .map(|ty| ValType::from_wasm_type(engine, ty))
@@ -2576,7 +2576,7 @@ impl FuncType {
     pub fn result(&self, i: usize) -> Option<ValType> {
         let engine = self.engine();
         self.registered_type
-            .unwrap_func()
+            .unwrap_func_shared_or_unshared()
             .results()
             .get(i)
             .map(|ty| ValType::from_wasm_type(engine, ty))
@@ -2587,7 +2587,7 @@ impl FuncType {
     pub fn results(&self) -> impl ExactSizeIterator<Item = ValType> + '_ {
         let engine = self.engine();
         self.registered_type
-            .unwrap_func()
+            .unwrap_func_shared_or_unshared()
             .results()
             .iter()
             .map(|ty| ValType::from_wasm_type(engine, ty))
@@ -2701,7 +2701,7 @@ impl FuncType {
     }
 
     pub(crate) fn from_registered_type(registered_type: RegisteredType) -> Self {
-        debug_assert!(registered_type.is_func());
+        debug_assert!(registered_type.is_func_shared_or_unshared());
         Self { registered_type }
     }
     /// Construct a func which returns results of default value, if each result type has a default value.
@@ -3092,6 +3092,7 @@ impl TableType {
                 idx_type: IndexType::I32,
                 limits,
                 ref_type,
+                shared: false,
             },
         }
     }
@@ -3114,6 +3115,7 @@ impl TableType {
                 ref_type,
                 idx_type: IndexType::I64,
                 limits: Limits { min, max },
+                shared: false,
             },
         }
     }

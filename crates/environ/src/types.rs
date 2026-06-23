@@ -1432,6 +1432,21 @@ impl fmt::Display for WasmSubType {
 #[expect(missing_docs, reason = "self-describing functions")]
 impl WasmSubType {
     #[inline]
+    pub fn is_func_shared_or_unshared(&self) -> bool {
+        self.composite_type.inner.is_func()
+    }
+
+    #[inline]
+    pub fn as_func_shared_or_unshared(&self) -> Option<&WasmFuncType> {
+        self.composite_type.inner.as_func()
+    }
+
+    #[inline]
+    pub fn unwrap_func_shared_or_unshared(&self) -> &WasmFuncType {
+        self.composite_type.inner.unwrap_func()
+    }
+
+    #[inline]
     pub fn is_func(&self) -> bool {
         self.composite_type.inner.is_func() && !self.composite_type.shared
     }
@@ -1921,6 +1936,10 @@ pub struct Global {
     pub wasm_ty: crate::WasmValType,
     /// A flag indicating whether the value may change at runtime.
     pub mutability: bool,
+    /// Whether the global may be shared between multiple threads.
+    ///
+    /// This is part of the shared-everything-threads proposal.
+    pub shared: bool,
 }
 
 impl TypeTrace for Global {
@@ -1931,6 +1950,7 @@ impl TypeTrace for Global {
         let Global {
             wasm_ty,
             mutability: _,
+            shared: _,
         } = self;
         wasm_ty.trace(func)
     }
@@ -1942,6 +1962,7 @@ impl TypeTrace for Global {
         let Global {
             wasm_ty,
             mutability: _,
+            shared: _,
         } = self;
         wasm_ty.trace_mut(func)
     }
@@ -2110,7 +2131,7 @@ impl ConstOp {
             O::RefNull { hty } => Self::RefNull(env.convert_heap_type(hty)?),
             O::RefFunc { function_index } => Self::RefFunc(FuncIndex::from_u32(function_index)),
             O::GlobalGet { global_index } => Self::GlobalGet(GlobalIndex::from_u32(global_index)),
-            O::RefI31 => Self::RefI31,
+            O::RefI31 | O::RefI31Shared { .. } => Self::RefI31,
             O::I32Add => Self::I32Add,
             O::I32Sub => Self::I32Sub,
             O::I32Mul => Self::I32Mul,
@@ -2173,6 +2194,10 @@ pub struct Table {
     pub limits: Limits,
     /// The table elements' Wasm type.
     pub ref_type: WasmRefType,
+    /// Whether the table may be shared between multiple threads.
+    ///
+    /// This is part of the shared-everything-threads proposal.
+    pub shared: bool,
 }
 
 impl TypeTrace for Table {
@@ -2184,6 +2209,7 @@ impl TypeTrace for Table {
             ref_type: wasm_ty,
             idx_type: _,
             limits: _,
+            shared: _,
         } = self;
         wasm_ty.trace(func)
     }
@@ -2196,6 +2222,7 @@ impl TypeTrace for Table {
             ref_type: wasm_ty,
             idx_type: _,
             limits: _,
+            shared: _,
         } = self;
         wasm_ty.trace_mut(func)
     }
@@ -2490,6 +2517,7 @@ pub trait TypeConvert {
         Ok(Global {
             wasm_ty: self.convert_valtype(ty.content_type)?,
             mutability: ty.mutable,
+            shared: ty.shared,
         })
     }
 
@@ -2507,6 +2535,7 @@ pub trait TypeConvert {
             idx_type,
             limits,
             ref_type: self.convert_ref_type(ty.element_type)?,
+            shared: ty.shared,
         })
     }
 
@@ -2635,6 +2664,20 @@ pub trait TypeConvert {
                 wasmparser::AbstractHeapType::Exn => WasmHeapType::Exn,
                 wasmparser::AbstractHeapType::NoExn => WasmHeapType::NoExn,
             },
+            // Experimental subset: i31 is an immediate value, so this is
+            // enough to exercise the proposal's shared i31 tests.
+            wasmparser::HeapType::Abstract {
+                ty: wasmparser::AbstractHeapType::I31,
+                shared: true,
+            } => WasmHeapType::I31,
+            wasmparser::HeapType::Abstract {
+                ty: wasmparser::AbstractHeapType::Any,
+                shared: true,
+            } => WasmHeapType::Any,
+            wasmparser::HeapType::Abstract {
+                ty: wasmparser::AbstractHeapType::Func,
+                shared: true,
+            } => WasmHeapType::Func,
             _ => return Err(wasm_unsupported!("unsupported heap type {ty:?}")),
         })
     }

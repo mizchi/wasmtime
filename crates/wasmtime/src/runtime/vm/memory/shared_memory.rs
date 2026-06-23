@@ -130,6 +130,15 @@ impl SharedMemory {
         Ok(self.0.spot.notify(ptr, count))
     }
 
+    /// Interrupt all atomic waiters currently parked on this shared memory.
+    ///
+    /// This is a fork-local runtime cancellation hook. It is intentionally not
+    /// exposed as guest-visible `memory.atomic.notify`: interrupted waiters are
+    /// translated to `Trap::Interrupt` by Wasmtime libcalls.
+    pub(crate) fn interrupt_atomic_waiters(&self) -> u32 {
+        self.0.spot.interrupt_all()
+    }
+
     /// Implementation of `memory.atomic.wait32` for this shared memory.
     pub fn atomic_wait32(
         &self,

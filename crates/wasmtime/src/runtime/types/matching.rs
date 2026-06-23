@@ -120,10 +120,24 @@ fn global_ty(engine: &Engine, expected: &Global, actual: &Global) -> Result<()> 
         "mutable",
         "immutable",
     )?;
+    match_bool(
+        expected.shared,
+        actual.shared,
+        "global",
+        "shared",
+        "non-shared",
+    )?;
     Ok(())
 }
 
 fn table_ty(expected: &Table, actual: &Table, actual_runtime_size: Option<u64>) -> Result<()> {
+    match_bool(
+        expected.shared,
+        actual.shared,
+        "table",
+        "shared",
+        "non-shared",
+    )?;
     equal_ty(
         WasmValType::Ref(expected.ref_type),
         WasmValType::Ref(actual.ref_type),

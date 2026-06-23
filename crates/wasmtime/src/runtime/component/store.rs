@@ -156,6 +156,7 @@ impl ComponentStoreData {
 
             assert!(instance.get_mut().instance_states().0.iter_mut().all(
                 |(_, state): (_, &mut InstanceState)| state.handle_table().is_empty()
+                    && state.thread_handle_table().is_empty()
                     && state.concurrent_state().pending_is_empty()
             ));
         }

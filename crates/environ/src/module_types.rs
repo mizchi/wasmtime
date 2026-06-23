@@ -101,7 +101,7 @@ impl ModuleTypes {
     /// See the docs for `WasmFuncType::trampoline_type` for details on
     /// trampoline types.
     pub fn trampoline_type(&self, ty: ModuleInternedTypeIndex) -> ModuleInternedTypeIndex {
-        debug_assert!(self[ty].is_func());
+        debug_assert!(self[ty].is_func_shared_or_unshared());
         self.trampoline_types[ty].unwrap()
     }
 
@@ -124,11 +124,11 @@ impl ModuleTypes {
 
         debug_assert!(!for_ty.is_reserved_value());
         debug_assert!(!trampoline_ty.is_reserved_value());
-        debug_assert!(self.wasm_types[for_ty].is_func());
+        debug_assert!(self.wasm_types[for_ty].is_func_shared_or_unshared());
         debug_assert!(self.trampoline_types[for_ty].is_none());
         debug_assert!(
             self.wasm_types[trampoline_ty]
-                .unwrap_func()
+                .unwrap_func_shared_or_unshared()
                 .is_trampoline_type()
         );
 

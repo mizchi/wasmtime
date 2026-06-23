@@ -59,6 +59,8 @@ use crate::prelude::*;
 use crate::runtime::store::{Asyncness, InstanceId, StoreOpaque};
 #[cfg(feature = "gc")]
 use crate::runtime::vm::VMGcRef;
+#[cfg(feature = "threads")]
+use crate::runtime::vm::WaitResult;
 use crate::runtime::vm::{self, HostResultHasUnwindSentinel, VMStore, f32x4, f64x2, i8x16};
 use core::convert::Infallible;
 use core::ptr::NonNull;
@@ -649,10 +651,14 @@ fn memory_atomic_wait32(
 ) -> Result<u32, Trap> {
     let timeout = (timeout as i64 >= 0).then(|| Duration::from_nanos(timeout));
     let memory = DefinedMemoryIndex::from_u32(memory_index);
-    Ok(store
+    let result = store
         .instance_mut(instance)
         .get_defined_memory_mut(memory)
-        .atomic_wait32(addr_index, expected, timeout)? as u32)
+        .atomic_wait32(addr_index, expected, timeout)?;
+    match result {
+        WaitResult::Interrupted => Err(Trap::Interrupt),
+        result => Ok(result as u32),
+    }
 }
 
 // Implementation of `memory.atomic.wait64` for locally defined memories.
@@ -667,10 +673,14 @@ fn memory_atomic_wait64(
 ) -> Result<u32, Trap> {
     let timeout = (timeout as i64 >= 0).then(|| Duration::from_nanos(timeout));
     let memory = DefinedMemoryIndex::from_u32(memory_index);
-    Ok(store
+    let result = store
         .instance_mut(instance)
         .get_defined_memory_mut(memory)
-        .atomic_wait64(addr_index, expected, timeout)? as u32)
+        .atomic_wait64(addr_index, expected, timeout)?;
+    match result {
+        WaitResult::Interrupted => Err(Trap::Interrupt),
+        result => Ok(result as u32),
+    }
 }
 
 // Hook for when an instance runs out of fuel.

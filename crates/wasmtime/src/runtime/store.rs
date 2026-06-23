@@ -240,6 +240,8 @@ pub struct StoreInner<T: 'static> {
 
     limiter: Option<ResourceLimiterInner<T>>,
     call_hook: Option<CallHookInner<T>>,
+    #[cfg(feature = "component-model-async")]
+    component_thread_store_data_factory: Option<ComponentThreadStoreDataFactory<T>>,
     #[cfg(target_has_atomic = "64")]
     epoch_deadline_behavior:
         Option<Box<dyn FnMut(StoreContextMut<T>) -> Result<UpdateDeadline> + Send + Sync>>,
@@ -308,6 +310,10 @@ enum ResourceLimiterInner<T> {
     #[cfg(feature = "async")]
     Async(Box<dyn (FnMut(&mut T) -> &mut dyn crate::ResourceLimiterAsync) + Send + Sync>),
 }
+
+#[cfg(feature = "component-model-async")]
+pub(crate) type ComponentThreadStoreDataFactory<T> =
+    alloc::sync::Arc<dyn Fn() -> T + Send + Sync + 'static>;
 
 /// Representation of a configured resource limiter for a store.
 ///
@@ -764,6 +770,8 @@ impl<T> Store<T> {
             inner,
             limiter: None,
             call_hook: None,
+            #[cfg(feature = "component-model-async")]
+            component_thread_store_data_factory: None,
             #[cfg(target_has_atomic = "64")]
             epoch_deadline_behavior: None,
             data_no_provenance: ManuallyDrop::new(data),
@@ -831,6 +839,19 @@ impl<T> Store<T> {
     #[inline]
     pub fn data_mut(&mut self) -> &mut T {
         self.inner.data_mut()
+    }
+
+    /// Configure a fork-local factory used by the experimental unsafe
+    /// Component Model OS-thread spawn path to construct sibling store data.
+    #[cfg(feature = "component-model-async")]
+    #[doc(hidden)]
+    pub fn set_unsafe_component_thread_store_data_factory(
+        &mut self,
+        factory: impl Fn() -> T + Send + Sync + 'static,
+    ) where
+        T: Send,
+    {
+        self.inner.component_thread_store_data_factory = Some(alloc::sync::Arc::new(factory));
     }
 
     fn run_manual_drop_routines(&mut self) {
@@ -1351,6 +1372,13 @@ impl<'a, T> StoreContextMut<'a, T> {
 }
 
 impl<T> StoreInner<T> {
+    #[cfg(feature = "component-model-async")]
+    pub(crate) fn component_thread_store_data_factory(
+        &self,
+    ) -> Option<ComponentThreadStoreDataFactory<T>> {
+        self.component_thread_store_data_factory.clone()
+    }
+
     #[inline]
     fn data(&self) -> &T {
         // We are actually just accessing `&self.data_no_provenance` but we must

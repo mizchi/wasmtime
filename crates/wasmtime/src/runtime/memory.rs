@@ -1013,7 +1013,7 @@ impl SharedMemory {
     /// The optional `timeout` argument is the maximum amount of time to block
     /// the current thread. If not specified the thread may sleep indefinitely.
     ///
-    /// This function returns one of three possible values:
+    /// This function returns one of these possible values:
     ///
     /// * `WaitResult::Ok` - this function, loaded the value at `addr`, found
     ///   it was equal to `expected`, and then blocked (all as one atomic
@@ -1024,6 +1024,8 @@ impl SharedMemory {
     ///   returned.
     /// * `WaitResult::TimedOut` - all the steps of `Ok` happened, except this
     ///   thread was woken up due to a timeout.
+    /// * `WaitResult::Interrupted` - the wait was interrupted by a fork-local
+    ///   runtime cancellation hook.
     ///
     /// This function will not return due to spurious wakeups.
     ///
@@ -1081,6 +1083,15 @@ impl SharedMemory {
             ExportMemory::Unshared(_) => unreachable!(),
             ExportMemory::Shared(_shared, vmimport) => vmimport,
         }
+    }
+
+    /// Interrupt all atomic waiters currently parked on this shared memory.
+    ///
+    /// Fork-local runtime cancellation hook for the Component Model OS-thread
+    /// experiment.
+    #[cfg(test)]
+    pub(crate) fn interrupt_atomic_waiters(&self) -> u32 {
+        self.vm.interrupt_atomic_waiters()
     }
 
     /// Creates a [`SharedMemory`] from its constituent parts.

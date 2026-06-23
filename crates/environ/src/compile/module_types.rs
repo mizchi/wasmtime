@@ -142,7 +142,7 @@ impl ModuleTypesBuilder {
         // intern new function types, which would conflict with the contiguous
         // range of type indices we pre-reserved for the rec group elements.
         for ty in self.rec_group_elements(rec_group_index) {
-            if self.types[ty].is_func() {
+            if self.types[ty].is_func_shared_or_unshared() {
                 let trampoline = self.intern_trampoline_type(ty);
                 self.types.set_trampoline_type(ty, trampoline);
             }
@@ -158,7 +158,10 @@ impl ModuleTypesBuilder {
         for_func_ty: ModuleInternedTypeIndex,
     ) -> ModuleInternedTypeIndex {
         let sub_ty = &self.types[for_func_ty];
-        let trampoline = sub_ty.unwrap_func().trampoline_type().panic_on_oom();
+        let trampoline = sub_ty
+            .unwrap_func_shared_or_unshared()
+            .trampoline_type()
+            .panic_on_oom();
 
         if let Some(idx) = self.trampoline_types.get(&trampoline) {
             // We've already interned this trampoline type; reuse it.
@@ -568,28 +571,41 @@ where
                 // array vs struct vs func reference. In this case, we can use
                 // the validator's type context.
                 if let Some(ty) = self.types.types.get(interned) {
-                    assert!(!ty.composite_type.shared);
                     match &ty.composite_type.inner {
-                        WasmCompositeInnerType::Array(_) => WasmHeapType::ConcreteArray(index),
                         WasmCompositeInnerType::Func(_) => WasmHeapType::ConcreteFunc(index),
-                        WasmCompositeInnerType::Struct(_) => WasmHeapType::ConcreteStruct(index),
-                        WasmCompositeInnerType::Cont(_) => WasmHeapType::ConcreteCont(index),
-                        WasmCompositeInnerType::Exn(_) => WasmHeapType::ConcreteExn(index),
+                        WasmCompositeInnerType::Array(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteArray(index)
+                        }
+                        WasmCompositeInnerType::Struct(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteStruct(index)
+                        }
+                        WasmCompositeInnerType::Cont(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteCont(index)
+                        }
+                        WasmCompositeInnerType::Exn(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteExn(index)
+                        }
                     }
                 } else if let Some((wasmparser_types, _)) = self.rec_group_context.as_ref() {
                     let wasmparser_ty = &wasmparser_types[id].composite_type;
-                    assert!(!wasmparser_ty.shared);
                     match &wasmparser_ty.inner {
-                        wasmparser::CompositeInnerType::Array(_) => {
-                            WasmHeapType::ConcreteArray(index)
-                        }
                         wasmparser::CompositeInnerType::Func(_) => {
                             WasmHeapType::ConcreteFunc(index)
                         }
+                        wasmparser::CompositeInnerType::Array(_) => {
+                            assert!(!wasmparser_ty.shared);
+                            WasmHeapType::ConcreteArray(index)
+                        }
                         wasmparser::CompositeInnerType::Struct(_) => {
+                            assert!(!wasmparser_ty.shared);
                             WasmHeapType::ConcreteStruct(index)
                         }
                         wasmparser::CompositeInnerType::Cont(_) => {
+                            assert!(!wasmparser_ty.shared);
                             WasmHeapType::ConcreteCont(index)
                         }
                     }
@@ -609,13 +625,24 @@ where
                 // indirectly get one by looking it up inside the current rec
                 // group.
                 if let Some(ty) = self.types.types.get(interned) {
-                    assert!(!ty.composite_type.shared);
                     match &ty.composite_type.inner {
-                        WasmCompositeInnerType::Array(_) => WasmHeapType::ConcreteArray(index),
                         WasmCompositeInnerType::Func(_) => WasmHeapType::ConcreteFunc(index),
-                        WasmCompositeInnerType::Struct(_) => WasmHeapType::ConcreteStruct(index),
-                        WasmCompositeInnerType::Cont(_) => WasmHeapType::ConcreteCont(index),
-                        WasmCompositeInnerType::Exn(_) => WasmHeapType::ConcreteExn(index),
+                        WasmCompositeInnerType::Array(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteArray(index)
+                        }
+                        WasmCompositeInnerType::Struct(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteStruct(index)
+                        }
+                        WasmCompositeInnerType::Cont(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteCont(index)
+                        }
+                        WasmCompositeInnerType::Exn(_) => {
+                            assert!(!ty.composite_type.shared);
+                            WasmHeapType::ConcreteExn(index)
+                        }
                     }
                 } else if let Some((parser_types, rec_group)) = self.rec_group_context.as_ref() {
                     let rec_group_index = interned.index() - self.types.types.len_types();
@@ -624,18 +651,20 @@ where
                         .nth(rec_group_index)
                         .unwrap();
                     let wasmparser_ty = &parser_types[id].composite_type;
-                    assert!(!wasmparser_ty.shared);
                     match &wasmparser_ty.inner {
-                        wasmparser::CompositeInnerType::Array(_) => {
-                            WasmHeapType::ConcreteArray(index)
-                        }
                         wasmparser::CompositeInnerType::Func(_) => {
                             WasmHeapType::ConcreteFunc(index)
                         }
+                        wasmparser::CompositeInnerType::Array(_) => {
+                            assert!(!wasmparser_ty.shared);
+                            WasmHeapType::ConcreteArray(index)
+                        }
                         wasmparser::CompositeInnerType::Struct(_) => {
+                            assert!(!wasmparser_ty.shared);
                             WasmHeapType::ConcreteStruct(index)
                         }
                         wasmparser::CompositeInnerType::Cont(_) => {
+                            assert!(!wasmparser_ty.shared);
                             WasmHeapType::ConcreteCont(index)
                         }
                     }

@@ -156,7 +156,7 @@ pub fn match_val(store: &mut Store<()>, actual: &Val, expected: &CoreConst) -> R
                 bail!("expected an eqref, found {x:?}");
             }
         }
-        (Val::AnyRef(Some(x)), CoreConst::I31Ref) => {
+        (Val::AnyRef(Some(x)), CoreConst::I31Ref | CoreConst::I31RefShared) => {
             if x.is_i31(store)? {
                 Ok(())
             } else {

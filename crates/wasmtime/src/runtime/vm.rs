@@ -131,7 +131,7 @@ pub use crate::runtime::vm::vmcontext::VMLazyThread;
 pub use crate::runtime::vm::vmcontext::{
     VMArrayCallHostFuncContext, VMContext, VMFuncRef, VMFunctionImport, VMGlobalDefinition,
     VMGlobalImport, VMGlobalKind, VMMemoryDefinition, VMMemoryImport, VMOpaqueContext,
-    VMStoreContext, VMTableImport, VMTagImport, VMWasmCallFunction, ValRaw,
+    VMStoreContext, VMTableDefinition, VMTableImport, VMTagImport, VMWasmCallFunction, ValRaw,
 };
 #[cfg(has_custom_sync)]
 pub(crate) use sys::capi;
@@ -449,6 +449,13 @@ pub enum WaitResult {
     /// Indicates that `wait` completed with a timeout, meaning that the
     /// original value matched as expected but nothing ever called `notify`.
     TimedOut = 2,
+    /// Indicates that `wait` was interrupted by a runtime cancellation path.
+    ///
+    /// This is a fork-local extension used internally by the experimental
+    /// Component Model OS-thread cancellation path. Wasm `memory.atomic.wait*`
+    /// libcalls translate this to `Trap::Interrupt` instead of returning it to
+    /// guest code.
+    Interrupted = 3,
 }
 
 /// Description about a fault that occurred in WebAssembly.

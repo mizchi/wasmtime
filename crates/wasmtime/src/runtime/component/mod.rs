@@ -114,6 +114,7 @@ mod resource_table;
 mod resources;
 mod storage;
 pub(crate) mod store;
+mod threading;
 pub mod types;
 mod values;
 pub use self::component::{Component, ComponentExportIndex, ExportLookup};
@@ -123,6 +124,7 @@ pub use self::concurrent::{
     ErrorContext, FuncCallConcurrent, FutureAny, FutureConsumer, FutureProducer, FutureReader,
     GuardedFutureReader, GuardedStreamReader, GuestTaskId, JoinHandle, ReadBuffer, Source,
     StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult, TypedFuncCallConcurrent,
+    UnsafeComponentThreadCompletion, UnsafeComponentThreadStatus,
     VMComponentAsyncStore, VecBuffer, WriteBuffer,
 };
 pub use self::func::{

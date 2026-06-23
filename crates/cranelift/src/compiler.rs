@@ -494,7 +494,7 @@ impl wasmtime_environ::Compiler for Compiler {
         let sig = translation.module.functions[func_index]
             .signature
             .unwrap_module_type_index();
-        let wasm_func_ty = types[sig].unwrap_func();
+        let wasm_func_ty = types[sig].unwrap_func_shared_or_unshared();
 
         let mut compiler = self.function_compiler();
 
@@ -613,7 +613,7 @@ impl wasmtime_environ::Compiler for Compiler {
                 self.array_to_wasm_trampoline(
                     key,
                     FuncKey::DefinedWasmFunction(module_index, def_func_index),
-                    types[sig].unwrap_func(),
+                    types[sig].unwrap_func_shared_or_unshared(),
                     symbol,
                     wasmtime_environ::VMCONTEXT_MAGIC,
                     |alias_regions, _pointer_type, cursor, vmctx| {
@@ -623,12 +623,12 @@ impl wasmtime_environ::Compiler for Compiler {
             }
 
             FuncKey::WasmToArrayTrampoline(ty) => {
-                let ty = types[ty].unwrap_func();
+                let ty = types[ty].unwrap_func_shared_or_unshared();
                 self.compile_wasm_to_array_trampoline(ty, key, symbol)
             }
             FuncKey::ResourceDropTrampoline => {
                 let ty = types.find_resource_drop_signature().unwrap();
-                let ty = types[ty].unwrap_func();
+                let ty = types[ty].unwrap_func_shared_or_unshared();
                 self.compile_wasm_to_array_trampoline(ty, key, symbol)
             }
 
@@ -654,7 +654,7 @@ impl wasmtime_environ::Compiler for Compiler {
                         t.unwrap_module_type_index()
                     }
                 };
-                let ty = types[ty].unwrap_func();
+                let ty = types[ty].unwrap_func_shared_or_unshared();
                 match abi {
                     // This is a thin array-to-wasm shim around the actual
                     // implementation.

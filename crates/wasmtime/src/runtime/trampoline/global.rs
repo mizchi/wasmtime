@@ -24,6 +24,7 @@ pub fn generate_global_export(
             Mutability::Const => false,
             Mutability::Var => true,
         },
+        shared: false,
     };
     let ctx = StoreBox::new(VMHostGlobalContext {
         ty: global,

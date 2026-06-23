@@ -1181,7 +1181,10 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
         let ty = self.module.functions[function_index]
             .signature
             .unwrap_module_type_index();
-        self.types[ty].unwrap_func().params().len()
+        self.types[ty]
+            .unwrap_func_shared_or_unshared()
+            .params()
+            .len()
     }
 
     /// Get the number of Wasm parameters for the given function type.
@@ -1189,7 +1192,10 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
     /// Panics on non-function types.
     pub(crate) fn num_params_for_function_type(&self, type_index: TypeIndex) -> usize {
         let ty = self.module.types[type_index].unwrap_module_type_index();
-        self.types[ty].unwrap_func().params().len()
+        self.types[ty]
+            .unwrap_func_shared_or_unshared()
+            .params()
+            .len()
     }
 
     /// Initialize the state slot with an empty layout.
@@ -1509,7 +1515,7 @@ impl FuncEnvironment<'_> {
         func: &mut ir::Function,
         index: ModuleInternedTypeIndex,
     ) -> ir::SigRef {
-        let wasm_func_ty = self.types[index].unwrap_func();
+        let wasm_func_ty = self.types[index].unwrap_func_shared_or_unshared();
         let sig = crate::wasm_call_signature(self.isa, wasm_func_ty, &self.tunables);
         let sig_ref = func.import_signature(sig);
         self.sig_ref_to_ty[sig_ref] = Some(wasm_func_ty);

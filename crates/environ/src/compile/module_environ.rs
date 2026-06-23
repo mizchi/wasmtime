@@ -833,7 +833,7 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                     let sig_index = self.result.module.functions[func_index]
                         .signature
                         .unwrap_module_type_index();
-                    let sig = self.types[sig_index].unwrap_func();
+                    let sig = self.types[sig_index].unwrap_func_shared_or_unshared();
                     let mut locals = Vec::new();
                     for pair in body.get_locals_reader()? {
                         let (cnt, ty) = pair?;

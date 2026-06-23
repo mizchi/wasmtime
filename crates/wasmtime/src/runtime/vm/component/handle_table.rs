@@ -585,6 +585,11 @@ pub struct ThreadHandleTable(HandleTable);
 
 #[cfg(feature = "component-model-async")]
 impl ThreadHandleTable {
+    /// Returns whether or not this table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Inserts the guest thread `rep` into this table, returning the index it
     /// now resides at.
     pub fn guest_thread_insert(&mut self, rep: u32) -> Result<u32> {
@@ -596,6 +601,18 @@ impl ThreadHandleTable {
         match self.0.get_mut(idx)? {
             Slot::GuestThread { rep } => Ok(*rep),
             _ => bail!("handle is not a guest thread"),
+        }
+    }
+
+    /// Returns the `rep` of a guest thread pointed to by `idx`, if present.
+    pub fn guest_thread_rep_if_present(&mut self, idx: u32) -> Result<Option<u32>> {
+        let Some(idx) = self.0.handle_index_to_table_index(idx) else {
+            return Ok(None);
+        };
+        match self.0.slots.get_mut(idx) {
+            None | Some(Slot::Free { .. }) => Ok(None),
+            Some(Slot::GuestThread { rep }) => Ok(Some(*rep)),
+            Some(_) => bail!("handle is not a guest thread"),
         }
     }
 

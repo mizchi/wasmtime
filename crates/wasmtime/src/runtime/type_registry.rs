@@ -1184,7 +1184,6 @@ impl TypeRegistryInner {
             debug_assert!(entry.0.shared_type_indices.iter().all(|ty| {
                 let id = shared_type_index_to_slab_id(*ty);
                 let sub_ty = self.types[id].as_ref().unwrap();
-                assert!(!sub_ty.composite_type.shared);
                 matches!(
                     &sub_ty.composite_type.inner,
                     wasmtime_environ::WasmCompositeInnerType::Func(_)
@@ -1196,7 +1195,6 @@ impl TypeRegistryInner {
         for &ty_idx in &entry.0.shared_type_indices {
             let id = shared_type_index_to_slab_id(ty_idx);
             let sub_ty = self.types[id].as_ref().unwrap();
-            assert!(!sub_ty.composite_type.shared);
 
             let gc_layout = match &sub_ty.composite_type.inner {
                 wasmtime_environ::WasmCompositeInnerType::Func(_) => continue,
@@ -1705,7 +1703,7 @@ impl TypeRegistry {
 
         let ty = inner.types[slab_id].as_ref().unwrap();
         debug_assert!(
-            ty.is_func(),
+            ty.is_func_shared_or_unshared(),
             "cannot get the trampoline type of a non-function type: {index:?} = {ty:?}"
         );
 

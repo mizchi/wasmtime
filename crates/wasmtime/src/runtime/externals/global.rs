@@ -375,6 +375,7 @@ impl Global {
                 const TY: wasmtime_environ::Global = wasmtime_environ::Global {
                     mutability: true,
                     wasm_ty: wasmtime_environ::WasmValType::I32,
+                    shared: false,
                 };
                 &TY
             }

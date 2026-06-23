@@ -1,6 +1,7 @@
 use crate::component::func::HostFunc;
 use crate::component::matching::InstanceType;
 use crate::component::store::{ComponentInstanceId, StoreComponentInstanceId};
+use crate::component::threading::ComponentThreadTemplate;
 use crate::component::{
     Component, ComponentExportIndex, ComponentNamedList, Func, Lift, Lower, ResourceType,
     TypedFunc, types::ComponentItem,
@@ -18,7 +19,9 @@ use core::marker;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::{EngineOrModuleTypeIndex, component::*};
-use wasmtime_environ::{EntityIndex, EntityType, PrimaryMap};
+use wasmtime_environ::{
+    EntityIndex, EntityType, PrimaryMap, VMSharedTypeIndex, WasmCompositeInnerType, WasmValType,
+};
 
 /// An instantiated component.
 ///
@@ -366,6 +369,35 @@ impl Instance {
         // type signature just above by ensuring the store's data is `T` which
         // matches the return value.
         unsafe { data.instance_pre() }
+    }
+
+    pub(crate) fn component_thread_template<T>(
+        &self,
+        mut store: impl AsContextMut<Data = T>,
+    ) -> ComponentThreadTemplate<T> {
+        let store = store.as_context_mut().0;
+        // This indexing operation asserts the Store owns the Instance.
+        // Therefore, the InstancePre<T> must match the Store<T>.
+        let data = self.id().get(store);
+
+        // SAFETY: same reasoning as `Instance::instance_pre`.
+        let instance_pre = unsafe { data.instance_pre() };
+        ComponentThreadTemplate::new(instance_pre, store, self.id().instance())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "fork-local scaffold used once the OS-thread spawn path is wired"
+    )]
+    pub(crate) unsafe fn rebind_component_thread_runtime_state<T>(
+        &self,
+        mut store: impl AsContextMut<Data = T>,
+        template: &ComponentThreadTemplate<T>,
+    ) {
+        let data = self.id().get_mut(store.as_context_mut().0);
+        unsafe {
+            template.rebind_runtime_state_to(data);
+        }
     }
 
     pub(crate) fn id(&self) -> StoreComponentInstanceId {
@@ -1007,6 +1039,11 @@ impl<'a> Instantiator<'a> {
                 EngineOrModuleTypeIndex::RecGroup(_) => unreachable!(),
             };
             let actual = unsafe { f.vm_func_ref(store).as_ref().type_index };
+            if Self::fork_local_thread_index_shared_match(
+                store, imp_module, imp_name, expected, actual,
+            ) {
+                return;
+            }
             assert_eq!(
                 expected,
                 Some(actual),
@@ -1024,6 +1061,46 @@ impl<'a> Instantiator<'a> {
         crate::types::matching::MatchCx::new(module.engine())
             .definition(&expected, &ty)
             .expect("unexpected typecheck failure");
+    }
+
+    fn fork_local_thread_index_shared_match(
+        store: &StoreOpaque,
+        imp_module: &str,
+        imp_name: &str,
+        expected: Option<VMSharedTypeIndex>,
+        actual: VMSharedTypeIndex,
+    ) -> bool {
+        if !imp_module.is_empty() || imp_name != "thread.index" {
+            return false;
+        }
+
+        let Some(expected) = expected else {
+            return false;
+        };
+        let signatures = store.engine().signatures();
+        let Some(expected) = signatures.borrow(expected) else {
+            return false;
+        };
+        let Some(actual) = signatures.borrow(actual) else {
+            return false;
+        };
+
+        if expected.composite_type.shared == actual.composite_type.shared {
+            return false;
+        }
+
+        let (
+            WasmCompositeInnerType::Func(expected_func),
+            WasmCompositeInnerType::Func(actual_func),
+        ) = (&expected.composite_type.inner, &actual.composite_type.inner)
+        else {
+            return false;
+        };
+
+        expected_func.params().is_empty()
+            && actual_func.params().is_empty()
+            && expected_func.results() == [WasmValType::I32]
+            && actual_func.results() == [WasmValType::I32]
     }
 
     /// Convenience helper to return the `&ComponentInstance` that's being
