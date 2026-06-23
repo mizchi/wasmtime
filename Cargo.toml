@@ -272,6 +272,9 @@ redundant_field_names = 'warn'
 multiple_bound_locations = 'warn'
 extra_unused_type_parameters = 'warn'
 
+[patch.crates-io]
+wasmparser = { path = "crates/forks/wasmparser" }
+
 [workspace.dependencies]
 # Public crates related to Wasmtime.
 #
