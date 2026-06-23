@@ -8,6 +8,7 @@ mod call_hook;
 mod cli_tests;
 mod compile_time_builtins;
 mod component_model;
+mod component_thread_abi;
 mod coredump;
 mod cross_engine;
 mod custom_code_memory;

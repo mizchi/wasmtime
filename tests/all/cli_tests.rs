@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::time::{Duration, Instant};
 use tempfile::{NamedTempFile, TempDir};
 use wasmtime::{Result, bail};
 
@@ -525,6 +526,169 @@ fn run_cwasm_from_stdin() -> Result<()> {
     let output = child.wait_with_output()?;
     assert!(output.status.success());
     t.join().unwrap();
+    Ok(())
+}
+
+#[cfg(feature = "wasi-threads")]
+#[test]
+fn run_wasi_threads_speedup_probe() -> Result<()> {
+    // Skip this test on platforms that don't support threads. Also skip ASAN
+    // for the same reason as `run_threads`: child threads are not joined before
+    // process exit.
+    if crate::threads::engine().is_none() || cfg!(asan) {
+        return Ok(());
+    }
+
+    let wasm = build_wasm("tests/all/cli_tests/wasi_threads_speedup.wat")?;
+    let path = wasm.path().to_str().unwrap();
+    let serial = run_wasmtime(&[
+        "run",
+        "-Wthreads,shared-memory",
+        "-Sthreads",
+        "-Ccache=n",
+        "--invoke",
+        "serial",
+        path,
+    ])?;
+    let parallel = run_wasmtime(&[
+        "run",
+        "-Wthreads,shared-memory",
+        "-Sthreads",
+        "-Ccache=n",
+        "--invoke",
+        "parallel",
+        path,
+    ])?;
+
+    assert_eq!(serial, parallel);
+    Ok(())
+}
+
+#[test]
+#[ignore = "fork-local unsafe Component Model OS-thread timing probe"]
+fn run_component_thread_speedup_probe() -> Result<()> {
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    if available < 2 {
+        eprintln!("skipping Component Model speedup probe: available parallelism is {available}");
+        return Ok(());
+    }
+
+    let serial = time_component_thread_speedup_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-speedup-serial.wast",
+    )?;
+    let parallel = time_component_thread_speedup_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-speedup-parallel.wast",
+    )?;
+    let speedup = serial.as_secs_f64() / parallel.as_secs_f64();
+    eprintln!(
+        "component-thread speedup probe: available_parallelism={available}, serial={serial:?}, parallel={parallel:?}, speedup={speedup:.2}x"
+    );
+
+    if speedup < 1.2 {
+        bail!(
+            "expected unsafe Component Model OS-thread path to be at least 1.2x faster, got {speedup:.2}x (serial={serial:?}, parallel={parallel:?})"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "fork-local unsafe Component Model OS-thread ABI-shaped timing probe"]
+fn run_component_thread_vibe_abi_speedup_probe() -> Result<()> {
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    if available < 2 {
+        eprintln!(
+            "skipping Component Model Vibe ABI speedup probe: available parallelism is {available}"
+        );
+        return Ok(());
+    }
+
+    let serial = time_component_thread_speedup_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi-speedup-serial.wast",
+    )?;
+    let parallel = time_component_thread_speedup_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi-speedup-parallel.wast",
+    )?;
+    let speedup = serial.as_secs_f64() / parallel.as_secs_f64();
+    eprintln!(
+        "component-thread Vibe ABI speedup probe: available_parallelism={available}, serial={serial:?}, parallel={parallel:?}, speedup={speedup:.2}x"
+    );
+
+    if speedup < 1.2 {
+        bail!(
+            "expected unsafe Component Model OS-thread Vibe ABI path to be at least 1.2x faster, got {speedup:.2}x (serial={serial:?}, parallel={parallel:?})"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "fork-local unsafe Component Model OS-thread Vibe ABI probe"]
+fn run_component_thread_vibe_abi_probe() -> Result<()> {
+    run_component_thread_unsafe_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi.wast",
+    )
+}
+
+#[test]
+#[ignore = "fork-local unsafe Component Model OS-thread Vibe context-pointer probe"]
+fn run_component_thread_context_pointer_probe() -> Result<()> {
+    run_component_thread_unsafe_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-context-pointer-not-handle.wast",
+    )
+}
+
+#[test]
+#[ignore = "fork-local unsafe Component Model OS-thread Vibe shared-value payload probe"]
+fn run_component_thread_shared_value_payload_probe() -> Result<()> {
+    run_component_thread_unsafe_wast(
+        "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-shared-value-payload.wast",
+    )
+}
+
+fn time_component_thread_speedup_wast(path: &str) -> Result<Duration> {
+    let start = Instant::now();
+    run_component_thread_unsafe_wast(path)?;
+    Ok(start.elapsed())
+}
+
+fn run_component_thread_unsafe_wast(path: &str) -> Result<()> {
+    let mut cmd = get_wasmtime_command()?;
+    cmd.env("WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN", "1");
+    cmd.args([
+        "wast",
+        "-Ccache=n",
+        "-W",
+        "threads=y",
+        "-W",
+        "component-model=y",
+        "-W",
+        "component-model-async=y",
+        "-W",
+        "component-model-threading=y",
+        "-W",
+        "gc=y",
+        "-W",
+        "function-references=y",
+        "-W",
+        "shared-everything-threads=y",
+        path,
+    ]);
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        bail!(
+            "failed to execute unsafe Component Model thread wast {path}\nstatus: {}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 use wasmtime::Result;
 use wasmtime::component::*;
-use wasmtime::{Module, Store};
+use wasmtime::{Config, Engine, Module, Store};
 
 #[test]
 #[cfg_attr(miri, ignore)]
@@ -93,6 +93,63 @@ fn export_old_get_new() -> Result<()> {
         .get_export_index(&mut store, None, "a:b/i@1.0.1")
         .unwrap();
     instance.get_export(&mut store, Some(&i), "m").unwrap();
+
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn instance_pre_sibling_does_not_share_defined_shared_memory() -> Result<()> {
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    config.wasm_threads(true);
+    config.shared_memory(true);
+    let engine = Engine::new(&config)?;
+
+    let component = Component::new(
+        &engine,
+        r#"
+        (component
+            (core module $m
+                (memory (export "memory") 1 1 shared)
+                (func (export "write") (param i32)
+                    i32.const 0
+                    local.get 0
+                    i32.atomic.store)
+                (func (export "read") (result i32)
+                    i32.const 0
+                    i32.atomic.load))
+            (core instance $i (instantiate $m))
+
+            (func (export "write") (param "v" u32)
+                (canon lift (core func $i "write")))
+            (func (export "read") (result u32)
+                (canon lift (core func $i "read")))
+        )
+        "#,
+    )?;
+
+    let linker = Linker::new(&engine);
+    let mut parent_store = Store::new(&engine, ());
+    let parent = linker.instantiate(&mut parent_store, &component)?;
+    let instance_pre = parent.instance_pre(&parent_store);
+
+    let mut sibling_store = Store::new(&engine, ());
+    let sibling = instance_pre.instantiate(&mut sibling_store)?;
+
+    parent
+        .get_typed_func::<(u32,), ()>(&mut parent_store, "write")?
+        .call(&mut parent_store, (7,))?;
+
+    let (sibling_value,) = sibling
+        .get_typed_func::<(), (u32,)>(&mut sibling_store, "read")?
+        .call(&mut sibling_store, ())?;
+    assert_eq!(sibling_value, 0);
+
+    let (parent_value,) = parent
+        .get_typed_func::<(), (u32,)>(&mut parent_store, "read")?
+        .call(&mut parent_store, ())?;
+    assert_eq!(parent_value, 7);
 
     Ok(())
 }
