@@ -391,6 +391,14 @@ impl RunCommand {
         self.populate_with_wasi(&mut linker, &mut store)?;
         self.run.configure_store(&mut store, |t| &mut t.limits)?;
 
+        #[cfg(feature = "component-model-async")]
+        {
+            let component_thread_host = store.data().clone();
+            store.set_unsafe_component_thread_store_data_factory(move || {
+                component_thread_host.clone()
+            });
+        }
+
         Ok((store, linker))
     }
 

@@ -1288,6 +1288,7 @@ impl CommonOptions {
             ("gc", gc, wasm_gc)
             ("gc", reference_types, wasm_reference_types)
             ("gc", function_references, wasm_function_references)
+            ("gc", shared_everything_threads, wasm_shared_everything_threads)
             ("gc", exceptions, wasm_exceptions)
             ("stack-switching", stack_switching, wasm_stack_switching)
         }
