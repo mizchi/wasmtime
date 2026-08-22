@@ -114,6 +114,7 @@ mod resource_table;
 mod resources;
 mod storage;
 pub(crate) mod store;
+#[cfg(feature = "experimental-component-threads")]
 mod threading;
 pub mod types;
 mod values;
@@ -124,9 +125,10 @@ pub use self::concurrent::{
     ErrorContext, FuncCallConcurrent, FutureAny, FutureConsumer, FutureProducer, FutureReader,
     GuardedFutureReader, GuardedStreamReader, GuestTaskId, JoinHandle, ReadBuffer, Source,
     StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult, TypedFuncCallConcurrent,
-    UnsafeComponentThreadCompletion, UnsafeComponentThreadStatus, VMComponentAsyncStore, VecBuffer,
-    WriteBuffer,
+    VMComponentAsyncStore, VecBuffer, WriteBuffer,
 };
+#[cfg(feature = "experimental-component-threads")]
+pub use self::concurrent::{UnsafeComponentThreadCompletion, UnsafeComponentThreadStatus};
 pub use self::func::{
     ComponentNamedList, ComponentType, Func, Lift, Lower, TypedFunc, WasmList, WasmStr,
 };

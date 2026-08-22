@@ -15,6 +15,8 @@ Follow the Bytecode Alliance AI Tool Use Policy for all Wasmtime work.
 ## Goals
 
 - Keep Wasmtime buildable locally with experimental flags enabled.
+- Keep unsafe sibling-Store execution behind the off-by-default
+  `experimental-component-threads` Cargo feature as well as its runtime opt-in.
 - Keep legacy Vibe-shaped fixtures as engine probes, not as a Vibe guest ABI.
 - Validate the current shared-everything subset that is already useful:
   - `(ref (shared i31))`

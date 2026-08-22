@@ -54,6 +54,12 @@ answers engine and proposal questions:
 - whether host diagnostic cancellation and completion remain internally
   consistent.
 
+The unsafe runtime implementation and its embedder APIs are compiled only with
+the off-by-default Cargo feature `experimental-component-threads`. Enabling
+Component Model async support alone does not compile the sibling-Store
+rebinding module or expose its diagnostic APIs. Runtime execution additionally
+requires `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1`.
+
 The fixed diagnostic slots in the WAST probes are test scaffolding for those
 questions. Despite legacy filenames containing `vibe-abi`, they are not a
 current Vibe ABI and must not be consumed by Vibe code generation.

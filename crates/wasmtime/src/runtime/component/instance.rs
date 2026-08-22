@@ -1,6 +1,7 @@
 use crate::component::func::HostFunc;
 use crate::component::matching::InstanceType;
 use crate::component::store::{ComponentInstanceId, StoreComponentInstanceId};
+#[cfg(feature = "experimental-component-threads")]
 use crate::component::threading::ComponentThreadTemplate;
 use crate::component::{
     Component, ComponentExportIndex, ComponentNamedList, Func, Lift, Lower, ResourceType,
@@ -371,6 +372,7 @@ impl Instance {
         unsafe { data.instance_pre() }
     }
 
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_template<T>(
         &self,
         mut store: impl AsContextMut<Data = T>,
@@ -385,6 +387,7 @@ impl Instance {
         ComponentThreadTemplate::new(instance_pre, store, self.id().instance())
     }
 
+    #[cfg(feature = "experimental-component-threads")]
     #[allow(
         dead_code,
         reason = "fork-local scaffold used once the OS-thread spawn path is wired"

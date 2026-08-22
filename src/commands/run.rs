@@ -393,6 +393,7 @@ impl RunCommand {
 
         #[cfg(feature = "component-model-async")]
         {
+            #[cfg(feature = "experimental-component-threads")]
             store.set_unsafe_component_thread_store_data_factory(Host::default);
         }
 

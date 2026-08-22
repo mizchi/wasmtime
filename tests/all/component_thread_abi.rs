@@ -158,6 +158,40 @@ fn current_vibe_backend_contract_rejects_the_retired_guest_abi() {
     }
 }
 
+#[test]
+fn unsafe_component_threads_require_an_off_by_default_compile_feature() {
+    let root_path = "Cargo.toml";
+    let root = fs::read_to_string(root_path).unwrap();
+    assert_contains(
+        root_path,
+        &root,
+        "experimental-component-threads = [\"wasmtime/experimental-component-threads\"]",
+    );
+
+    let crate_path = "crates/wasmtime/Cargo.toml";
+    let wasmtime = fs::read_to_string(crate_path).unwrap();
+    assert_contains(
+        crate_path,
+        &wasmtime,
+        "experimental-component-threads = [\"component-model-async\", \"threads\"]",
+    );
+
+    let default_features = root
+        .split("default = [")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap();
+    assert!(!default_features.contains("experimental-component-threads"));
+
+    let component_module_path = "crates/wasmtime/src/runtime/component/mod.rs";
+    let component_module = fs::read_to_string(component_module_path).unwrap();
+    assert_contains(
+        component_module_path,
+        &component_module,
+        "#[cfg(feature = \"experimental-component-threads\")]\nmod threading;",
+    );
+}
+
 fn assert_contains(path: &str, source: &str, needle: &str) {
     assert!(source.contains(needle), "{path} should contain {needle:?}");
 }

@@ -50,7 +50,10 @@
 //! store.  This is equivalent to `StoreContextMut::spawn` but more convenient to use
 //! in host functions.
 
+#![cfg_attr(not(feature = "experimental-component-threads"), allow(dead_code))]
+
 use self::error_contexts::GlobalErrorContextRefCount;
+#[cfg(feature = "experimental-component-threads")]
 use super::threading::ComponentThreadSpawnPlan;
 use crate::bail_bug;
 use crate::component::func::{Func, call_post_return};
@@ -125,10 +128,17 @@ pub(crate) mod tls;
 /// intrinsic (e.g. `future.write`) has not yet completed.
 const BLOCKED: u32 = 0xffff_ffff;
 
+#[cfg(feature = "experimental-component-threads")]
 fn component_thread_unsafe_os_spawn_enabled() -> bool {
     std::env::var_os("WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN").is_some()
 }
 
+#[cfg(not(feature = "experimental-component-threads"))]
+fn component_thread_unsafe_os_spawn_enabled() -> bool {
+    false
+}
+
+#[cfg(feature = "experimental-component-threads")]
 fn component_thread_unsafe_os_spawn_allowed(shared: bool) -> bool {
     component_thread_unsafe_os_spawn_allowed_for(shared, component_thread_unsafe_os_spawn_enabled())
 }
@@ -2728,6 +2738,7 @@ impl Instance {
     /// diagnostic embedder hook for local experiments with
     /// `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1`. The `thread` parameter is
     /// a transient component thread-table index, not a stable join handle.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_status(
         self,
@@ -2745,6 +2756,7 @@ impl Instance {
     /// This is not a Component Model canonical ABI operation. It requests
     /// cancellation of one OS-owned child while its transient thread-table
     /// index is still live.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_cancel(
         self,
@@ -2762,6 +2774,7 @@ impl Instance {
     /// Returns `Ok(None)` while the child is still running. Once a child is
     /// terminal this removes the parent placeholder. This is a host diagnostic
     /// cleanup hook, not a guest-visible `thread.join`.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_try_join(
         self,
@@ -2781,6 +2794,7 @@ impl Instance {
     /// report. Unlike `unsafe_component_thread_try_join`, child
     /// setup/start/panic failures are returned as `Failed` reports with a
     /// failure message instead of being surfaced as API errors.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_try_join_completion(
         self,
@@ -2798,6 +2812,7 @@ impl Instance {
     /// This waits for the OS-owned child host thread to finish, then removes
     /// the parent placeholder. This is a host diagnostic cleanup hook, not a
     /// guest-visible `thread.join`.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_join(
         self,
@@ -2817,6 +2832,7 @@ impl Instance {
     /// `unsafe_component_thread_join`, child setup/start/panic failures are
     /// returned as `Failed` reports with a failure message instead of being
     /// surfaced as API errors.
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn unsafe_component_thread_join_completion(
         self,
@@ -4239,6 +4255,10 @@ impl Instance {
     }
 
     /// Implements the `thread.spawn-ref` intrinsic.
+    #[cfg_attr(
+        not(feature = "experimental-component-threads"),
+        allow(unused_variables)
+    )]
     pub(crate) fn thread_spawn_ref<T: 'static>(
         self,
         mut store: StoreContextMut<T>,
@@ -4256,48 +4276,52 @@ impl Instance {
             bail!(Trap::ThreadNewIndirectInvalidType);
         }
 
-        let unsafe_os_spawn_allowed = component_thread_unsafe_os_spawn_allowed(shared);
-        if log::log_enabled!(log::Level::Trace) || unsafe_os_spawn_allowed {
-            let template = self.component_thread_template(store.as_context_mut());
-            if log::log_enabled!(log::Level::Trace) {
-                log::trace!(
-                    "component thread template captured {} runtime memories, {} runtime tables, \
+        #[cfg(feature = "experimental-component-threads")]
+        {
+            let unsafe_os_spawn_allowed = component_thread_unsafe_os_spawn_allowed(shared);
+            if log::log_enabled!(log::Level::Trace) || unsafe_os_spawn_allowed {
+                let template = self.component_thread_template(store.as_context_mut());
+                if log::log_enabled!(log::Level::Trace) {
+                    log::trace!(
+                        "component thread template captured {} runtime memories, {} runtime tables, \
                      {} core shared memories, {} core shared tables, {} core shared globals, \
                      {} parent core instances, {} instantiated core modules; core instance \
                      sharing required: {}",
-                    template.runtime_state().runtime_memories().len(),
-                    template.runtime_state().runtime_tables().len(),
-                    template.runtime_state().core_shared_memories().len(),
-                    template.runtime_state().core_shared_tables().len(),
-                    template.runtime_state().core_shared_globals().len(),
-                    template.runtime_state().parent_core_instances().len(),
-                    template.instantiated_core_modules(),
-                    template.requires_core_instance_state_sharing(),
-                );
-                let _ = template.instance_pre();
-            }
+                        template.runtime_state().runtime_memories().len(),
+                        template.runtime_state().runtime_tables().len(),
+                        template.runtime_state().core_shared_memories().len(),
+                        template.runtime_state().core_shared_tables().len(),
+                        template.runtime_state().core_shared_globals().len(),
+                        template.runtime_state().parent_core_instances().len(),
+                        template.instantiated_core_modules(),
+                        template.requires_core_instance_state_sharing(),
+                    );
+                    let _ = template.instance_pre();
+                }
 
-            if unsafe_os_spawn_allowed {
-                let start_func_vmctx = Some(unsafe { start_func_ref.as_ref().vmctx.as_non_null() });
-                let start_func =
-                    self.resolve_unsafe_component_thread_start_func(store.0, start_func_ref)?;
-                template.validate_unsafe_preemptive_spawn_ref(start_func_vmctx)?;
-                let store_data_factory = store.0.component_thread_store_data_factory();
-                if let Some(plan) =
-                    template.spawn_plan_with_store_data_factory(store_data_factory)?
-                {
-                    return self.unsafe_thread_spawn_on_os_thread(
-                        store.as_context_mut(),
-                        runtime_instance,
-                        plan,
-                        start_func,
-                        context,
+                if unsafe_os_spawn_allowed {
+                    let start_func_vmctx =
+                        Some(unsafe { start_func_ref.as_ref().vmctx.as_non_null() });
+                    let start_func =
+                        self.resolve_unsafe_component_thread_start_func(store.0, start_func_ref)?;
+                    template.validate_unsafe_preemptive_spawn_ref(start_func_vmctx)?;
+                    let store_data_factory = store.0.component_thread_store_data_factory();
+                    if let Some(plan) =
+                        template.spawn_plan_with_store_data_factory(store_data_factory)?
+                    {
+                        return self.unsafe_thread_spawn_on_os_thread(
+                            store.as_context_mut(),
+                            runtime_instance,
+                            plan,
+                            start_func,
+                            context,
+                        );
+                    }
+                    log::trace!(
+                        "component thread template has no shared core memories, tables, or globals; \
+                     falling back to cooperative thread.spawn-ref"
                     );
                 }
-                log::trace!(
-                    "component thread template has no shared core memories, tables, or globals; \
-                     falling back to cooperative thread.spawn-ref"
-                );
             }
         }
 
@@ -4308,6 +4332,10 @@ impl Instance {
     }
 
     /// Implements the `thread.spawn-indirect` intrinsic.
+    #[cfg_attr(
+        not(feature = "experimental-component-threads"),
+        allow(unused_variables)
+    )]
     pub(crate) fn thread_spawn_indirect<T: 'static>(
         self,
         mut store: StoreContextMut<T>,
@@ -4318,67 +4346,70 @@ impl Instance {
         start_func_idx: u32,
         context: i32,
     ) -> Result<u32> {
-        let unsafe_os_spawn_allowed = component_thread_unsafe_os_spawn_allowed(shared);
-        if log::log_enabled!(log::Level::Trace) || unsafe_os_spawn_allowed {
-            let template = self.component_thread_template(store.as_context_mut());
-            if log::log_enabled!(log::Level::Trace) {
-                log::trace!(
-                    "component thread template captured {} runtime memories, {} runtime tables, \
+        #[cfg(feature = "experimental-component-threads")]
+        {
+            let unsafe_os_spawn_allowed = component_thread_unsafe_os_spawn_allowed(shared);
+            if log::log_enabled!(log::Level::Trace) || unsafe_os_spawn_allowed {
+                let template = self.component_thread_template(store.as_context_mut());
+                if log::log_enabled!(log::Level::Trace) {
+                    log::trace!(
+                        "component thread template captured {} runtime memories, {} runtime tables, \
                      {} core shared memories, {} core shared tables, {} core shared globals, \
                      {} parent core instances, {} instantiated core modules; core instance \
                      sharing required: {}",
-                    template.runtime_state().runtime_memories().len(),
-                    template.runtime_state().runtime_tables().len(),
-                    template.runtime_state().core_shared_memories().len(),
-                    template.runtime_state().core_shared_tables().len(),
-                    template.runtime_state().core_shared_globals().len(),
-                    template.runtime_state().parent_core_instances().len(),
-                    template.instantiated_core_modules(),
-                    template.requires_core_instance_state_sharing(),
-                );
-                let _ = template.instance_pre();
-            }
+                        template.runtime_state().runtime_memories().len(),
+                        template.runtime_state().runtime_tables().len(),
+                        template.runtime_state().core_shared_memories().len(),
+                        template.runtime_state().core_shared_tables().len(),
+                        template.runtime_state().core_shared_globals().len(),
+                        template.runtime_state().parent_core_instances().len(),
+                        template.instantiated_core_modules(),
+                        template.requires_core_instance_state_sharing(),
+                    );
+                    let _ = template.instance_pre();
+                }
 
-            if unsafe_os_spawn_allowed {
-                let (start_func_vmctx, start_func) = {
-                    let callee = {
-                        let (instance, registry) = self.id().get_mut_and_registry(store.0);
-                        instance
-                            .index_runtime_func_table(
-                                registry,
-                                start_func_table_idx,
-                                start_func_idx as u64,
-                            )?
-                            .ok_or_else(|| Trap::ThreadNewIndirectUninitialized)?
+                if unsafe_os_spawn_allowed {
+                    let (start_func_vmctx, start_func) = {
+                        let callee = {
+                            let (instance, registry) = self.id().get_mut_and_registry(store.0);
+                            instance
+                                .index_runtime_func_table(
+                                    registry,
+                                    start_func_table_idx,
+                                    start_func_idx as u64,
+                                )?
+                                .ok_or_else(|| Trap::ThreadNewIndirectUninitialized)?
+                        };
+                        let func_ref = callee.vm_func_ref(store.0);
+                        let start_func =
+                            self.resolve_unsafe_component_thread_start_func(store.0, func_ref)?;
+                        (
+                            Some(unsafe { func_ref.as_ref().vmctx.as_non_null() }),
+                            start_func,
+                        )
                     };
-                    let func_ref = callee.vm_func_ref(store.0);
-                    let start_func =
-                        self.resolve_unsafe_component_thread_start_func(store.0, func_ref)?;
-                    (
-                        Some(unsafe { func_ref.as_ref().vmctx.as_non_null() }),
-                        start_func,
-                    )
-                };
-                template.validate_unsafe_preemptive_spawn_indirect(
-                    start_func_table_idx,
-                    start_func_vmctx,
-                )?;
-                let store_data_factory = store.0.component_thread_store_data_factory();
-                if let Some(plan) =
-                    template.spawn_plan_with_store_data_factory(store_data_factory)?
-                {
-                    return self.unsafe_thread_spawn_on_os_thread(
-                        store.as_context_mut(),
-                        runtime_instance,
-                        plan,
-                        start_func,
-                        context,
+                    template.validate_unsafe_preemptive_spawn_indirect(
+                        start_func_table_idx,
+                        start_func_vmctx,
+                    )?;
+                    let store_data_factory = store.0.component_thread_store_data_factory();
+                    if let Some(plan) =
+                        template.spawn_plan_with_store_data_factory(store_data_factory)?
+                    {
+                        return self.unsafe_thread_spawn_on_os_thread(
+                            store.as_context_mut(),
+                            runtime_instance,
+                            plan,
+                            start_func,
+                            context,
+                        );
+                    }
+                    log::trace!(
+                        "component thread template has no shared core memories, tables, or globals; \
+                     falling back to cooperative thread.spawn-indirect"
                     );
                 }
-                log::trace!(
-                    "component thread template has no shared core memories, tables, or globals; \
-                     falling back to cooperative thread.spawn-indirect"
-                );
             }
         }
 
@@ -4394,6 +4425,7 @@ impl Instance {
         Ok(thread_idx)
     }
 
+    #[cfg(feature = "experimental-component-threads")]
     fn resolve_unsafe_component_thread_start_func(
         self,
         store: &mut StoreOpaque,
@@ -4438,6 +4470,7 @@ impl Instance {
         bail!("unsafe Component Model OS-thread start function is not a defined core function")
     }
 
+    #[cfg(feature = "experimental-component-threads")]
     fn unsafe_thread_spawn_on_os_thread<T: 'static>(
         self,
         mut store: StoreContextMut<T>,

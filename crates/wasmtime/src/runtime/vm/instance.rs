@@ -5,6 +5,8 @@
 use crate::code::ModuleWithCode;
 use crate::module::ModuleRegistry;
 use crate::prelude::*;
+#[cfg(feature = "experimental-component-threads")]
+use crate::runtime::vm::SharedMemory;
 use crate::runtime::vm::export::{Export, ExportMemory};
 use crate::runtime::vm::memory::{Memory, RuntimeMemoryCreator};
 use crate::runtime::vm::table::{Table, TableElementType};
@@ -14,8 +16,8 @@ use crate::runtime::vm::vmcontext::{
     VMTableDefinition, VMTableImport, VMTagDefinition, VMTagImport,
 };
 use crate::runtime::vm::{
-    GcStore, HostResult, Imports, ModuleRuntimeInfo, SendSyncPtr, SharedMemory, VMGcRef,
-    VMGlobalKind, VMStore, VMStoreRawPtr, VmPtr, VmSafe, WasmFault, catch_unwind_and_record_trap,
+    GcStore, HostResult, Imports, ModuleRuntimeInfo, SendSyncPtr, VMGcRef, VMGlobalKind, VMStore,
+    VMStoreRawPtr, VmPtr, VmSafe, WasmFault, catch_unwind_and_record_trap,
 };
 use crate::store::{InstanceId, StoreId, StoreInstanceId, StoreOpaque, StoreResourceLimiter};
 use crate::vm::{VMWasmCallFunction, ValRaw};
@@ -426,7 +428,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset(self.offsets().imported_tables().at(index)) }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_imported_table(&self, index: TableIndex) -> VMTableImport {
         *self.imported_table(index)
     }
@@ -436,7 +438,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset(self.offsets().imported_memories().at(index)) }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_imported_memory(&self, index: MemoryIndex) -> VMMemoryImport {
         *self.imported_memory(index)
     }
@@ -446,7 +448,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset(self.offsets().imported_globals().at(index)) }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_imported_global(&self, index: GlobalIndex) -> VMGlobalImport {
         *self.imported_global(index)
     }
@@ -479,7 +481,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset_raw(self.offsets().tables().at(index)) }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_defined_table(
         self: Pin<&mut Self>,
         index: DefinedTableIndex,
@@ -488,7 +490,7 @@ impl Instance {
         self.set_table(index, table);
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_imported_table(
         self: Pin<&mut Self>,
         index: TableIndex,
@@ -537,7 +539,7 @@ impl Instance {
         }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_defined_memory(
         self: Pin<&mut Self>,
         index: DefinedMemoryIndex,
@@ -549,7 +551,7 @@ impl Instance {
         }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_defined_shared_memory(
         mut self: Pin<&mut Self>,
         index: DefinedMemoryIndex,
@@ -563,7 +565,7 @@ impl Instance {
         }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_imported_memory_from(
         self: Pin<&mut Self>,
         index: MemoryIndex,
@@ -580,7 +582,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset_raw(self.offsets().globals().at(index)) }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_read_defined_global(
         &self,
         index: DefinedGlobalIndex,
@@ -588,7 +590,7 @@ impl Instance {
         unsafe { self.global_ptr(index).as_ptr().read() }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_write_defined_global(
         self: Pin<&mut Self>,
         index: DefinedGlobalIndex,
@@ -599,7 +601,7 @@ impl Instance {
         }
     }
 
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) unsafe fn component_thread_rebind_imported_global(
         self: Pin<&mut Self>,
         index: GlobalIndex,

@@ -240,7 +240,7 @@ pub struct StoreInner<T: 'static> {
 
     limiter: Option<ResourceLimiterInner<T>>,
     call_hook: Option<CallHookInner<T>>,
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     component_thread_store_data_factory: Option<ComponentThreadStoreDataFactory<T>>,
     #[cfg(target_has_atomic = "64")]
     epoch_deadline_behavior:
@@ -311,7 +311,7 @@ enum ResourceLimiterInner<T> {
     Async(Box<dyn (FnMut(&mut T) -> &mut dyn crate::ResourceLimiterAsync) + Send + Sync>),
 }
 
-#[cfg(feature = "component-model-async")]
+#[cfg(feature = "experimental-component-threads")]
 pub(crate) type ComponentThreadStoreDataFactory<T> =
     alloc::sync::Arc<dyn Fn() -> T + Send + Sync + 'static>;
 
@@ -770,7 +770,7 @@ impl<T> Store<T> {
             inner,
             limiter: None,
             call_hook: None,
-            #[cfg(feature = "component-model-async")]
+            #[cfg(feature = "experimental-component-threads")]
             component_thread_store_data_factory: None,
             #[cfg(target_has_atomic = "64")]
             epoch_deadline_behavior: None,
@@ -843,7 +843,7 @@ impl<T> Store<T> {
 
     /// Configure a fork-local factory used by the experimental unsafe
     /// Component Model OS-thread spawn path to construct sibling store data.
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     #[doc(hidden)]
     pub fn set_unsafe_component_thread_store_data_factory(
         &mut self,
@@ -1372,7 +1372,7 @@ impl<'a, T> StoreContextMut<'a, T> {
 }
 
 impl<T> StoreInner<T> {
-    #[cfg(feature = "component-model-async")]
+    #[cfg(feature = "experimental-component-threads")]
     pub(crate) fn component_thread_store_data_factory(
         &self,
     ) -> Option<ComponentThreadStoreDataFactory<T>> {
