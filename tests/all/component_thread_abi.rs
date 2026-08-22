@@ -3,7 +3,7 @@ use std::fs;
 const SHARED_IMMEDIATE_TOOLING_CRATES: &[&str] =
     &["wasmparser", "wast", "wasm-encoder", "wasmprinter"];
 
-struct VibeSlotAbi {
+struct DiagnosticSlotAbi {
     stride: i32,
     state_offset: i32,
     terminal_code_offset: i32,
@@ -14,7 +14,7 @@ struct VibeSlotAbi {
     worker_func_offset: i32,
 }
 
-const VIBE_SLOT_ABI: VibeSlotAbi = VibeSlotAbi {
+const DIAGNOSTIC_SLOT_ABI: DiagnosticSlotAbi = DiagnosticSlotAbi {
     stride: 32,
     state_offset: 0,
     terminal_code_offset: 4,
@@ -25,7 +25,7 @@ const VIBE_SLOT_ABI: VibeSlotAbi = VibeSlotAbi {
     worker_func_offset: 28,
 };
 
-const VIBE_ABI_WAST_FIXTURES: &[&str] = &[
+const DIAGNOSTIC_SLOT_WAST_FIXTURES: &[&str] = &[
     "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi.wast",
     "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi-speedup-serial.wast",
     "tests/misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi-speedup-parallel.wast",
@@ -51,8 +51,8 @@ fn component_thread_shared_immediate_tooling_scope_stays_documented() {
 }
 
 #[test]
-fn vibe_runtime_slot_abi_wast_fixtures_stay_in_sync() {
-    for path in VIBE_ABI_WAST_FIXTURES {
+fn fork_diagnostic_slot_wast_fixtures_stay_in_sync() {
+    for path in DIAGNOSTIC_SLOT_WAST_FIXTURES {
         let source = fs::read_to_string(path).unwrap();
 
         assert_contains(path, &source, ";; Slot layout");
@@ -65,20 +65,20 @@ fn vibe_runtime_slot_abi_wast_fixtures_stay_in_sync() {
 
         for slot in [
             0,
-            VIBE_SLOT_ABI.stride,
-            VIBE_SLOT_ABI.stride * 2,
-            VIBE_SLOT_ABI.stride * 3,
+            DIAGNOSTIC_SLOT_ABI.stride,
+            DIAGNOSTIC_SLOT_ABI.stride * 2,
+            DIAGNOSTIC_SLOT_ABI.stride * 3,
         ] {
             assert_contains(path, &source, &format!("i32.const {slot}"));
         }
 
         for offset in [
-            VIBE_SLOT_ABI.state_offset,
-            VIBE_SLOT_ABI.terminal_code_offset,
-            VIBE_SLOT_ABI.payload_offset,
-            VIBE_SLOT_ABI.input_offset,
-            VIBE_SLOT_ABI.cancel_offset,
-            VIBE_SLOT_ABI.mode_offset,
+            DIAGNOSTIC_SLOT_ABI.state_offset,
+            DIAGNOSTIC_SLOT_ABI.terminal_code_offset,
+            DIAGNOSTIC_SLOT_ABI.payload_offset,
+            DIAGNOSTIC_SLOT_ABI.input_offset,
+            DIAGNOSTIC_SLOT_ABI.cancel_offset,
+            DIAGNOSTIC_SLOT_ABI.mode_offset,
         ] {
             assert_contains(path, &source, &format!("i32.const {offset}"));
         }
@@ -86,9 +86,8 @@ fn vibe_runtime_slot_abi_wast_fixtures_stay_in_sync() {
 }
 
 #[test]
-fn vibe_runtime_slot_abi_docs_stay_in_sync() {
+fn fork_diagnostic_slot_docs_stay_in_sync() {
     let docs = [
-        "docs/experimental-vibe-thread-contract.md",
         "docs/experimental-shared-everything-conformance.md",
         "docs/experimental-component-thread-speedup.md",
         "docs/plans/thread-impl.md",
@@ -101,41 +100,61 @@ fn vibe_runtime_slot_abi_docs_stay_in_sync() {
         assert_contains(
             path,
             &source,
-            &format!("| `state` | `{}` |", VIBE_SLOT_ABI.state_offset),
+            &format!("| `state` | `{}` |", DIAGNOSTIC_SLOT_ABI.state_offset),
         );
         assert_contains(
             path,
             &source,
             &format!(
                 "| `terminal_code` | `{}` |",
-                VIBE_SLOT_ABI.terminal_code_offset
+                DIAGNOSTIC_SLOT_ABI.terminal_code_offset
             ),
         );
         assert_contains(
             path,
             &source,
-            &format!("| `payload` | `{}` |", VIBE_SLOT_ABI.payload_offset),
+            &format!("| `payload` | `{}` |", DIAGNOSTIC_SLOT_ABI.payload_offset),
         );
         assert_contains(
             path,
             &source,
-            &format!("| `input` | `{}` |", VIBE_SLOT_ABI.input_offset),
+            &format!("| `input` | `{}` |", DIAGNOSTIC_SLOT_ABI.input_offset),
         );
         assert_contains(
             path,
             &source,
-            &format!("| `cancel` | `{}` |", VIBE_SLOT_ABI.cancel_offset),
+            &format!("| `cancel` | `{}` |", DIAGNOSTIC_SLOT_ABI.cancel_offset),
         );
         assert_contains(
             path,
             &source,
-            &format!("| `mode` | `{}` |", VIBE_SLOT_ABI.mode_offset),
+            &format!("| `mode` | `{}` |", DIAGNOSTIC_SLOT_ABI.mode_offset),
         );
         assert_contains(
             path,
             &source,
-            &format!("| `worker_func` | `{}` |", VIBE_SLOT_ABI.worker_func_offset),
+            &format!(
+                "| `worker_func` | `{}` |",
+                DIAGNOSTIC_SLOT_ABI.worker_func_offset
+            ),
         );
+    }
+}
+
+#[test]
+fn current_vibe_backend_contract_rejects_the_retired_guest_abi() {
+    let path = "docs/experimental-vibe-thread-contract.md";
+    let source = fs::read_to_string(path).unwrap();
+
+    for contract in [
+        "`Threads::*` is not a Vibe API",
+        "`TaskGroup`",
+        "`Send`",
+        "independent `Store` and `Instance`",
+        "must not encode Vibe task, channel, join, or cancellation semantics",
+        "feature-detected, opt-in experiment",
+    ] {
+        assert_contains(path, &source, contract);
     }
 }
 

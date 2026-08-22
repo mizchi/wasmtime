@@ -8,11 +8,12 @@ This document separates the current `mizchi/wasmtime` thread experiment into:
 - proposal-defined behavior from shared-everything threads and the Component
   Model Canonical ABI
 - proposal-aligned but incomplete local implementation
-- fork-local diagnostics and Vibe ABI choices
+- fork-local diagnostics and retired Vibe prototype choices
 - known gaps that must not be exposed as `ComponentModelShared`
 
 The proposal is still under active development, so this is a validation aid for
-local Vibe integration, not an upstream Wasmtime conformance claim.
+engine experiments, not an upstream Wasmtime conformance claim or a current
+Vibe guest ABI.
 
 References:
 
@@ -29,7 +30,7 @@ References:
 | --- | --- |
 | Proposal-defined | The feature exists in the current proposal or Canonical ABI text. |
 | Proposal-aligned subset | The fork implements the same shape, but only for a constrained subset or through an implementation-specific trigger. |
-| Fork-local | The behavior is a local Wasmtime fork diagnostic or Vibe runtime ABI, not a WebAssembly proposal contract. |
+| Fork-local | The behavior is a local Wasmtime fork diagnostic or retired prototype ABI, not a WebAssembly proposal contract. |
 | Gap | The proposal has a concept that this fork does not implement yet, or the fork intentionally rejects it. |
 
 ## Summary
@@ -37,14 +38,16 @@ References:
 The fork currently has a useful `thread.spawn-indirect` OS-thread diagnostic
 path, but it is not a full shared-everything implementation.
 
-Vibe may use it as `ComponentModelUnsafeOsThreads` for local probes that match
-the documented ABI shape. Vibe must not call it `ComponentModelShared` until the
-missing shared state model, resource/GC model, and safe thread lifecycle
-semantics exist.
+The current Vibe runtime does not use this path. It remains an opt-in engine
+probe until the missing shared state model, resource/GC model, and safe thread
+lifecycle semantics exist.
 
 ## Conformance Matrix
 
-| Area | Proposal status | Current fork status | Classification | Vibe dependency |
+The last column is historical: it records why the fixture was originally added,
+not a dependency of current Vibe.
+
+| Area | Proposal status | Current fork status | Classification | Retired prototype dependency |
 | --- | --- | --- | --- | --- |
 | `shared` function types | Shared functions are part of the proposal. A shared function body must only access shared module fields. | Shared function types are parsed and used for `thread.spawn-indirect` and `thread.spawn-ref` start functions. The fork does not implement the full shared-function validation/runtime model for every shared object kind. | Proposal-aligned subset | Required for the unsafe backend start function. |
 | Shared memories | Shared memories are already standardized by the threads proposal and are a building block for shared-everything threads. | The unsafe path rebinds child shared-memory VMContext/import slots to parent `SharedMemory`, including futex wait queues. | Proposal-aligned subset | Yes. This is the primary supported communication path. |
@@ -61,9 +64,9 @@ semantics exist.
 | Spawn return value | Canonical ABI `spawn-*` returns a component thread-table index. | The unsafe path returns a parent placeholder index. Consuming diagnostics remove terminal OS-owned entries and numeric indices can be reused. | Proposal-shaped value with fork-local lifecycle | Vibe must ignore it for join/result semantics. |
 | Guest-visible join | The shared-everything proposal FAQ says there is no language-level join; join can be implemented with wait/notify. | No canonical guest join is added. Vibe-level join is implemented by generated trampoline-owned shared slots plus wait/notify. Host APIs can observe/join for diagnostics only. | Fork-local/Vibe ABI for join; no proposal builtin | Yes, but only through generated shared-state ABI. |
 | Thread completion result | Proposal thread start functions have no return value. Cleanup should be done by a trampoline if needed. Traps abort at the spec level. | Vibe ABI slots encode `completed`, `cancelled`, and `failed-as-value`. Real Wasm traps stay in host diagnostic failure records and are not synthesized into Vibe slots. | Vibe ABI/fork-local | Yes, as language runtime protocol. |
-| Vibe worker dispatch | The proposal does not define Vibe's source-level worker naming or channel ABI. A shared start function can call shared functions if the module satisfies shared validation. | The Vibe prototype can compile a string-literal `Threads::spawn("worker", ch)` into a trampoline slot field that dispatches a non-exported capture-free top-level worker over the current shared-value subset and writes the full 64-bit tagged result value into the slot payload. | Fork-local/Vibe ABI over proposal-aligned shared functions | Diagnostic only; not a general function-value, closure, or arbitrary heap-object contract. |
-| Vibe typed channel surface | The proposal leaves source-language channel types to the guest language/runtime. | The Vibe checker now represents channel handles as `ThreadChannel[T]`; `Threads::send` binds `T`, `Threads::recv` returns the same `T`, the handle remains the existing tagged `Int`, and shared channel payload cells use `i64.atomic.load/store` to preserve the full tagged value. | Vibe type-layer/runtime ABI contract | Yes for the current scalar, string, array, tuple, and scalar-field record probes. |
-| Vibe typed task surface | The proposal exposes a component thread-table index, but does not define Vibe's source-level task/result abstraction. | The Vibe checker now represents task handles as `ThreadTask[T]`; `Threads::spawn("name", ch)` returns `ThreadTask[R]` for supported string-literal worker result types and `ThreadTask[Int]` for reserved diagnostic names, `Threads::wait(task)` returns `T`, and the runtime representation remains the existing tagged `Int` slot pointer. | Vibe type-layer/runtime ABI contract | Yes for preventing arbitrary `Int` values from becoming Vibe join handles. |
+| Vibe worker dispatch | The proposal does not define Vibe's source-level worker naming or channel ABI. A shared start function can call shared functions if the module satisfies shared validation. | The retired prototype compiled a string-literal `Threads::spawn("worker", ch)` into a trampoline slot field. Current Vibe has no such API. | Fork-local retired ABI over proposal-aligned shared functions | Diagnostic fixture only. |
+| Vibe typed channel surface | The proposal leaves source-language channel types to the guest language/runtime. | The retired prototype represented channel handles as `ThreadChannel[T]` over tagged integers. Current Vibe uses region-bound structured-concurrency channels and `Send`. | Retired Vibe type/runtime ABI | None. |
+| Vibe typed task surface | The proposal exposes a component thread-table index, but does not define Vibe's source-level task/result abstraction. | The retired prototype represented task handles as `ThreadTask[T]` over tagged slot pointers. Current Vibe task identity and lifecycle are backend-independent. | Retired Vibe type/runtime ABI | None. |
 | Cancellation | Canonical ABI cooperative thread builtins have cancellation concepts. Shared-everything does not define a forced preemptive cancellation contract for `spawn-*`. | `subtask.cancel` can request fork-local OS-thread cancellation. Epoch interruption and atomic-wait interruption can classify cancel-caused interrupts as `Cancelled`. Vibe cancellation uses producer-owned shared cancel flags. | Fork-local diagnostics plus Vibe ABI | Use cooperative Vibe cancel flags for guest semantics. |
 | OS-thread execution backend | Proposal says `shared` spawned threads are preemptive/parallel but does not prescribe Wasmtime internals. | Implemented only behind `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1` by creating a sibling `Store`, instantiating a sibling component, and rebinding the positive shared ownership subset. | Fork-local implementation | Yes, for local performance probes only. |
 | Component resources | Component Model resources need cross-store resource tables, destructors, borrows, and host handles. | Rejected before unsafe OS-thread execution. | Gap | No. |
@@ -73,9 +76,24 @@ semantics exist.
 | Trap propagation across threads | Proposal FAQ says traps abort all threads; engines should abort quickly but timing is nondeterministic. | Child traps are host diagnostic failures in the unsafe path. They do not yet abort all sibling/parent guest execution as a proposal-level semantics. | Gap/fork-local diagnostic | No. |
 | Benchmark evidence | Proposal has goals for task/data parallelism but no benchmark contract. | Local ABI-shaped speedup probes show about `2.75x` direct CLI wall-clock speedup on 2026-06-02 for four CPU chunks. | Fork-local evidence | Yes, as performance evidence only. |
 
-## Vibe Integration Rule
+## Current Vibe Integration Rule
 
-Before connecting this to Vibe, treat the current fork as follows:
+The current `vibe-lang` design no longer exposes `Threads::*`, `ThreadTask`,
+`ThreadChannel`, raw integer task handles, string-selected workers, or the
+32-byte shared slot as language/runtime contracts. Vibe defines shared-nothing
+structured concurrency around `TaskGroup`, region-bound tasks and channels,
+`Send`, and backend-independent lifecycle semantics.
+
+The production-shaped Wasmtime boundary is a host-owned bounded pool with an
+independent `Store`, `Instance`, and heap per worker. Jobs and results are
+copied across that boundary. This fork's shared-everything path is only a
+feature-detected opt-in probe and must not encode Vibe task, channel, join, or
+cancellation semantics. See `docs/experimental-vibe-thread-contract.md`.
+
+### Retired Vibe prototype record
+
+The remainder of this section records the older prototype used to create the
+engine probes. It describes legacy fixtures, not a supported Vibe ABI.
 
 - Use `ComponentModelUnsafeOsThreads` only when the program matches the
   documented shared-memory slot ABI and the unsafe environment variable is set.
@@ -86,7 +104,7 @@ Before connecting this to Vibe, treat the current fork as follows:
 - Treat `thread.index` as a transient diagnostic index, not a stable TID.
 - Keep `ComponentModelShared` disabled.
 
-### Current Vibe Smoke (2026-06-05)
+### Retired Vibe smoke (2026-06-05)
 
 The current `vibe-lang` `feat/thread` probe can now reach the unsafe
 OS-thread path in this fork:
@@ -269,10 +287,6 @@ Real support needs a coordinated wasm-tools update across `wasmparser`, `wast`,
 
 ## Current Decision
 
-This fork is ready to validate Vibe's ABI shape and performance hypothesis. It
-is not ready to expose a proposal-complete shared-everything backend.
-
-The next Vibe-side work should broaden the same slot ABI from the diagnostic
-`Int -> Int` worker probe toward realistic heap object protocols and richer
-worker/function forms while keeping the backend label explicitly fork-local:
-`ComponentModelUnsafeOsThreads`.
+This fork is ready to validate engine behavior and the performance hypothesis.
+It is not ready to expose a proposal-complete shared-everything backend, and
+the retired slot ABI must not be broadened or reconnected to current Vibe.

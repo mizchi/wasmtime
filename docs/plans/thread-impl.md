@@ -1,12 +1,20 @@
 # Component Model Thread Implementation Plan
 
 Status: fork-local execution plan
-Date: 2026-06-02
+Date: 2026-08-22
 Scope: `mizchi/wasmtime` only
 
 This plan tracks the remaining work to turn the current
 `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1` probe into a more complete
-Component Model shared-thread experiment for Vibe.
+Component Model shared-thread experiment.
+
+Current Vibe does not consume the guest slot ABI described in the completed
+milestones below. Its public model is shared-nothing structured concurrency,
+and its production-shaped native/WASI integration uses a host-owned bounded
+pool with an independent `Store`, `Instance`, and heap per worker. All
+Vibe-named milestones and fixture names below are retained as experiment
+history; future work must treat their slots as generic diagnostics rather than
+as a Vibe contract. See `docs/experimental-vibe-thread-contract.md`.
 
 This is not an upstream contribution plan. Do not open pull requests, comment on
 issues, or review upstream Wasmtime pull requests from this fork experiment.

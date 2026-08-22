@@ -3,10 +3,13 @@
 Status: fork-local unsafe diagnostic
 Date: 2026-06-01
 
-This note records the first Vibe-shaped CPU-bound speedup probe for the
+This note records a legacy Vibe-shaped CPU-bound speedup probe for the
 fork-local Component Model OS-thread path.
 
-This is not a general shared-everything Component Model implementation. It only
+The current Vibe runtime does not consume this slot ABI; its production-shaped
+backend uses independent Store/Instance/heap workers. The legacy fixture names
+are retained as test history. This is not a general shared-everything Component
+Model implementation. It only
 validates that the current `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1`
 diagnostic path can run independent CPU work on host OS threads with shared
 memory result aggregation.
@@ -146,7 +149,8 @@ is the expected signature that the work ran on host OS threads.
 
 ## Interpretation
 
-This validates the workload shape Vibe needs:
+This validates the engine's parallel workload shape; it does not validate the
+current Vibe structured-concurrency contract:
 
 - independent CPU work can be split into component-thread start functions
 - shared memory can carry per-thread results and a done counter

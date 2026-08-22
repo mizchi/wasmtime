@@ -1,12 +1,12 @@
-# Experimental Fork Goal: shared-everything threads for vibe
+# Experimental Fork Goal: shared-everything thread feasibility
 
 Status: fork-local experiment
 Owner: mizchi fork
-Date: 2026-06-02
+Date: 2026-08-22
 
 This document tracks the local `mizchi/wasmtime` fork goal for enabling enough
-of WebAssembly shared-everything threads and Component Model threading to unblock
-`vibe-lang` experiments.
+of WebAssembly shared-everything threads and Component Model threading. Vibe's
+current production-shaped backend does not depend on this fork.
 
 This is not an upstream contribution plan. Do not open pull requests, comment on
 issues, or review upstream Wasmtime pull requests from this fork experiment.
@@ -15,7 +15,7 @@ Follow the Bytecode Alliance AI Tool Use Policy for all Wasmtime work.
 ## Goals
 
 - Keep Wasmtime buildable locally with experimental flags enabled.
-- Let `vibe-lang/src/x/threads` run probes against the local fork.
+- Keep legacy Vibe-shaped fixtures as engine probes, not as a Vibe guest ABI.
 - Validate the current shared-everything subset that is already useful:
   - `(ref (shared i31))`
   - `(ref null (shared any))`
@@ -73,26 +73,19 @@ Wasmtime already contains a cooperative Component Model threading runtime:
 
 The shortest path for `thread.spawn-indirect` is to reuse that machinery.
 
-## Vibe semantic contract
+## Current Vibe semantic boundary
 
-The fork must target the `vibe-lang/src/x/threads/THREADING_CONTRACT.md`
-abstraction. This prevents the same source-level Vibe API from changing meaning
-as the Wasmtime fork moves through partial implementations.
+Vibe's old `src/x/threads/THREADING_CONTRACT.md` and `Threads::*` surface no
+longer exist. The current contract is shared-nothing structured concurrency:
+`TaskGroup`, region-bound tasks/channels, structural `Send`, task-local handler
+evidence, cancellation, and deterministic group convergence.
 
-Vibe backends map as follows:
-
-| Vibe backend | Wasmtime fork meaning |
-| --- | --- |
-| `SerialOnly` | no spawn |
-| `WasiThreads` | WASI `thread-spawn`; real host-thread baseline |
-| `ComponentModelCooperative` | Component Model cooperative scheduler |
-| `ComponentModelShared` | true shared-everything host-thread execution |
-
-The key rule is that `ComponentModelCooperative` must not be reported as a
-parallel speedup backend. A fork-local `thread.spawn-indirect` that only fuses
-`thread.new-indirect` and resume is still cooperative. It becomes
-`ComponentModelShared` only when `shared=true` actually runs work concurrently on
-host threads with a sound shared state model.
+The production-shaped Wasmtime integration is embedder-owned parallelism with
+a bounded pool and an independent `Store`, `Instance`, and heap per worker.
+This fork must not expose its thread indices, diagnostic completion APIs, fixed
+slots, or unsafe cancellation as Vibe semantics. A future shared-everything
+lowering is acceptable only as a backend that passes the same normalized
+conformance traces as the cooperative implementation.
 
 ## Milestones
 
@@ -311,9 +304,10 @@ Vibe's `ComponentModelShared` backend.
 See `docs/experimental-preemptive-threading.md` for the current implementation
 shape and safe architecture options.
 
-## Validation from vibe
+## Historical validation from Vibe
 
-`vibe-lang` should keep three independent probes:
+Current Vibe does not keep or consume these probes. During the retired
+prototype, `vibe-lang` used three independent probes:
 
 - shared-everything core WAST probe
 - Component Model threading WAST probe
@@ -356,10 +350,8 @@ measured the Component Model serial WAST at 0.23s real time and the unsafe
 `thread.spawn-indirect` parallel WAST at 0.07s real time for checksum
 `1106140682`.
 
-This is useful evidence for Vibe's workload shape, but it is still a fork-local
-diagnostic. It must not be treated as the final safe `ComponentModelShared`
-backend until join, cancellation, shared-object ownership, and interruption
-semantics are tightened.
+This remains useful engine evidence, but it is a fork-local diagnostic rather
+than a current Vibe backend contract.
 
 The current validator now exposes a fork-local positive Vibe ownership subset
 for the unsafe path and rejects growable shared tables outside the imported
@@ -373,9 +365,9 @@ The speedup probes now also include an ABI-shaped serial/parallel pair using
 the same slot layout; direct local timing measured about `2.75x` wall-clock
 speedup on 2026-06-02.
 
-For Vibe, the current fork-local backend name should be
-`ComponentModelUnsafeOsThreads`. `ComponentModelShared` remains reserved for a
-future implementation with a stronger semantic contract.
+Current Vibe assigns no backend name to this fork-local path. Any future
+shared-everything lowering must preserve Vibe's backend-independent structured
+concurrency semantics.
 
 ## Useful commands
 
