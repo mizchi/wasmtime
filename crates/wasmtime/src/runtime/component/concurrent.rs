@@ -7359,6 +7359,7 @@ mod tests {
     use std::boxed::Box;
     use std::string::String;
     use std::time::Duration;
+    use std::vec::Vec;
     use wasmtime_environ::component::{
         RuntimeComponentInstanceIndex, StringEncoding, TypeTupleIndex,
     };
@@ -7842,6 +7843,81 @@ mod tests {
             .request_unsafe_os_thread_cancellation_for_task(parent.task)
             .unwrap();
         assert!(completion.cancel_requested());
+    }
+
+    #[test]
+    fn component_thread_structured_worker_group_failure_cancels_siblings_and_converges() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, ());
+        let parent = dummy_guest_task(store.as_context_mut().0.concurrent_state_mut().unwrap());
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (failed_tx, failed_rx) = std::sync::mpsc::channel();
+
+        let failed = ComponentThreadOsCompletion::new();
+        let failed_worker = failed.clone();
+        let failed_ready = ready_tx.clone();
+        let failed_handle = std::thread::spawn(move || {
+            failed_ready.send(()).unwrap();
+            failed_worker.record_start_failed("worker failed");
+            failed_tx.send(()).unwrap();
+        });
+        failed.attach_join_handle(failed_handle);
+        let failed_thread = dummy_unsafe_os_thread(&mut store, parent, failed);
+
+        let mut cancelled_threads = Vec::new();
+        for _ in 0..2 {
+            let completion = ComponentThreadOsCompletion::new();
+            let worker = completion.clone();
+            let ready = ready_tx.clone();
+            let handle = std::thread::spawn(move || {
+                ready.send(()).unwrap();
+                while !worker.cancel_requested() {
+                    std::thread::yield_now();
+                }
+                worker.record_cancelled();
+            });
+            completion.attach_join_handle(handle);
+            cancelled_threads.push(dummy_unsafe_os_thread(&mut store, parent, completion));
+        }
+        drop(ready_tx);
+
+        for _ in 0..3 {
+            ready_rx.recv().unwrap();
+        }
+        failed_rx.recv().unwrap();
+
+        store
+            .as_context_mut()
+            .0
+            .concurrent_state_mut()
+            .unwrap()
+            .request_unsafe_os_thread_cancellation_for_task(parent.task)
+            .unwrap();
+
+        let failed_report = store
+            .as_context_mut()
+            .0
+            .unsafe_os_thread_join_completion(failed_thread)
+            .unwrap();
+        assert_eq!(failed_report.status(), UnsafeComponentThreadStatus::Failed);
+        assert_eq!(failed_report.failure_message(), Some("worker failed"));
+
+        for thread in cancelled_threads {
+            let report = store
+                .as_context_mut()
+                .0
+                .unsafe_os_thread_join_completion(thread)
+                .unwrap();
+            assert_eq!(report.status(), UnsafeComponentThreadStatus::Cancelled);
+            assert_eq!(report.failure_message(), None);
+        }
+
+        let state = store.as_context_mut().0.concurrent_state_mut().unwrap();
+        assert!(state.unsafe_os_threads.is_empty());
+        let remaining_threads = &state.get_mut(parent.task).unwrap().threads;
+        assert_eq!(remaining_threads.len(), 1);
+        assert!(remaining_threads.contains(&parent.thread));
+        assert!(state.get_mut(failed_thread).is_err());
     }
 
     #[test]

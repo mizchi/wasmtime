@@ -64,6 +64,14 @@ The fixed diagnostic slots in the WAST probes are test scaffolding for those
 questions. Despite legacy filenames containing `vibe-abi`, they are not a
 current Vibe ABI and must not be consumed by Vibe code generation.
 
+The runtime test
+`component_thread_structured_worker_group_failure_cancels_siblings_and_converges`
+pins the host-side convergence shape needed by a structured-concurrency
+backend: one of three workers reports failure, the coordinator requests sibling
+cancellation, all child host threads are joined exactly once, failure remains a
+value in the diagnostic report, cancelled siblings report cancellation, and no
+child placeholder remains attached to the parent task.
+
 ## Promotion requirements
 
 A Vibe shared-everything lowering may be reconsidered only when all of these
