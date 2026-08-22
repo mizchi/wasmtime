@@ -149,18 +149,72 @@ fn spec_test_config(test: &Path) -> TestConfig {
             ret.custom_descriptors = Some(true);
         }
         Some(proposal) => panic!("unsupported proposal {proposal:?}"),
+
+        // The rough goal here is to enable a minimal set of features for the
+        // spec test in question. The fewer features required the more
+        // configurations this can run on. For example Winch doesn't currently
+        // support GC but it can still run all the simd tests which don't use
+        // GC. In general the upstream spec tests are not silo'd by feature
+        // meaning that one test probably requires a whole bunch of proposals.
+        // The tests are also quite large meaning the entire test may not need
+        // a particular feature, but there's not much we can do about that.
+        //
+        // What follows is a coarse algorithm of guessing, based on a test's
+        // name, what features are needed. The upstream spec test suite is a
+        // frozen commit in a git submodule within this repo meaning that this
+        // should work but will need updates when new tests are added or
+        // preexisting tests are changed.
         None => {
+            let test_name = test.file_name().unwrap().to_str().unwrap();
             ret.reference_types = Some(true);
-            ret.simd = Some(true);
-            ret.simd = Some(true);
-            ret.relaxed_simd = Some(true);
             ret.multi_memory = Some(true);
-            ret.gc = Some(true);
-            ret.reference_types = Some(true);
-            ret.memory64 = Some(true);
-            ret.tail_call = Some(true);
-            ret.extended_const = Some(true);
-            ret.exceptions = Some(true);
+            if test_name.contains("simd") {
+                ret.simd = Some(true);
+            }
+            if test_name.contains("relaxed") {
+                ret.relaxed_simd = Some(true);
+            }
+            if test_name.contains("64") || test_name.contains("mixed") {
+                ret.memory64 = Some(true);
+            }
+            if test_name.contains("ref")
+                || test_name.contains("array")
+                || test_name.contains("struct")
+                || test_name.contains("table")
+                || test_name.contains("type")
+                || test_name.contains("tag")
+                || test_name.contains("extern")
+                || test_name.contains("br_on_")
+                || test_name.contains("linking")
+                || test_name.contains("instance")
+                || test_name.contains("local_init")
+                || test_name.contains("elem")
+                || test_name.contains("global")
+                || test_name.contains("i31")
+                || test_name.contains("unreached-valid")
+                || test_name.contains("select")
+                || test_name.contains("data")
+            {
+                ret.gc = Some(true);
+            }
+            if test_name.contains("return_") || test_name.contains("try_table") {
+                ret.tail_call = Some(true);
+            }
+            if test_name.contains("tag")
+                || test_name.contains("try_table")
+                || test_name.contains("throw")
+                || test_name.contains("ref")
+                || test_name.contains("instance")
+                || test_name.contains("imports")
+            {
+                ret.exceptions = Some(true);
+            }
+            if test_name.contains("global")
+                || test_name.contains("elem")
+                || test_name.contains("data")
+            {
+                ret.extended_const = Some(true);
+            }
 
             if test.parent().unwrap().ends_with("legacy") {
                 ret.legacy_exceptions = Some(true);
@@ -193,22 +247,21 @@ fn component_test_config(test: &Path) -> TestConfig {
     ret.reference_types = Some(true);
     ret.multi_memory = Some(true);
     ret.component_model_implements = Some(true);
+    ret.bulk_memory = Some(true);
+    ret.component_model_async = Some(true);
+    ret.component_model_more_async_builtins = Some(true);
+    ret.component_model_async_stackful = Some(true);
+    ret.component_model_threading = Some(true);
+    ret.gc = Some(true);
+    ret.exceptions = Some(true);
+    ret.component_model_map = Some(true);
+    ret.component_model_fixed_length_lists = Some(true);
+
+    if test.ends_with("memory64.wast") {
+        ret.component_model_memory64 = Some(true);
+    }
 
     if let Some(parent) = test.parent() {
-        if parent.ends_with("async")
-            || [
-                "trap-in-post-return.wast",
-                "resources.wast",
-                "multiple-resources.wast",
-            ]
-            .into_iter()
-            .any(|name| Some(name) == test.file_name().and_then(|s| s.to_str()))
-        {
-            ret.component_model_async = Some(true);
-            ret.component_model_async_stackful = Some(true);
-            ret.component_model_more_async_builtins = Some(true);
-            ret.component_model_threading = Some(true);
-        }
         if parent.ends_with("wasm-tools") {
             ret.memory64 = Some(true);
             ret.threads = Some(true);
@@ -286,6 +339,7 @@ macro_rules! foreach_config_option {
             component_model_error_context
             component_model_gc
             component_model_map
+            component_model_memory64
             component_model_fixed_length_lists
             component_model_implements
             simd
@@ -403,20 +457,15 @@ impl Compiler {
                 if config.gc()
                     || config.tail_call()
                     || config.function_references()
-                    || config.gc()
                     || config.relaxed_simd()
-                    || config.gc_types()
-                    || config.exceptions()
                     || config.legacy_exceptions()
                     || config.stack_switching()
-                    || config.legacy_exceptions()
-                    || config.component_model_async()
                 {
                     return true;
                 }
 
                 if cfg!(target_arch = "aarch64") {
-                    return (config.simd() && !config.spec_test()) || config.threads();
+                    return config.threads();
                 }
 
                 !cfg!(target_arch = "x86_64")
@@ -471,85 +520,6 @@ impl WastTest {
             return true;
         }
 
-        let unsupported = [
-            // These tests in the `component-model` submodule have not yet been
-            // updated to account for the recent threading-related intrinsic
-            // changes.
-            "test/async/trap-if-block-and-sync.wast",
-            // Fork-local Red probe: current `thread.spawn-indirect` is
-            // cooperative and cannot run while the caller blocks in atomic
-            // wait. Remove this once the shared/preemptive path is implemented.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-preemptive-smoke.wast",
-            // Fork-local Red probe: direct `thread.spawn-ref` is likewise only
-            // preemptive under the unsafe sibling-Store OS-thread opt-in.
-            "misc_testsuite/component-model-threading/thread-spawn-ref-preemptive-smoke.wast",
-            // Fork-local unsafe synchronization probe: this only succeeds when
-            // parent and child component threads run on separate OS threads and
-            // share the same rebound-memory futex wait queues.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-bidirectional-wait-notify.wast",
-            // Fork-local unsafe multi-worker queue probe: this only succeeds
-            // when multiple spawned component threads can block on a shared
-            // gate, contend on an atomic job counter, and notify completion.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-multi-worker-queue.wast",
-            // Fork-local unsafe child-to-child cooperation probe: this only
-            // succeeds when multiple spawned component threads can rendezvous
-            // at a shared-memory barrier before a second reduction phase.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-phased-barrier-reduction.wast",
-            // Fork-local unsafe direct-global probe: this only succeeds when
-            // the immutable defined shared-global start function can run while
-            // the parent is blocked in atomic wait.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-defined-immutable-shared-global.wast",
-            // Fork-local unsafe thread-index probe: this only succeeds when
-            // `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1` moves the shared
-            // start function onto a sibling Store/OS thread.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-thread-index.wast",
-            // Fork-local unsafe language-runtime completion probe: this only
-            // succeeds when `thread.spawn-indirect` runs on a host OS thread;
-            // the canonical spawn return value is intentionally ignored.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-completion.wast",
-            // Fork-local unsafe Vibe context-pointer probe: this only
-            // succeeds when the child can publish completion through the
-            // context slot while the canonical spawn handle remains separate.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-context-pointer-not-handle.wast",
-            // Fork-local unsafe Vibe shared-value probe: this only succeeds
-            // when full 64-bit channel-like payloads and task-slot payloads are
-            // shared through memory while the parent blocks.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-shared-value-payload.wast",
-            // Fork-local unsafe language-runtime terminal-status probe: this
-            // only succeeds when `thread.spawn-indirect` runs on a host OS
-            // thread; status is carried by trampoline-owned shared state.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-status.wast",
-            // Fork-local unsafe language-runtime cancellation probe: this only
-            // succeeds when the child trampoline can sleep on a shared cancel
-            // flag and be woken by the parent.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-cancel-wakeup.wast",
-            // Fork-local unsafe Vibe runtime ABI probe: this only succeeds
-            // when completion/status/cancellation all flow through
-            // trampoline-owned shared slots while the parent blocks.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi.wast",
-            // Fork-local unsafe language-runtime trap-boundary probe: this
-            // only succeeds when the OS-thread path records child traps as host
-            // diagnostics rather than guest trampoline terminal values.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-trap-boundary.wast",
-            // Fork-local unsafe rejection probe: this only observes the
-            // preemptive validation guard when the OS-thread opt-in is active.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-growable-table-owner-func-rejected.wast",
-            // Fork-local unsafe speedup probe: this only succeeds when
-            // `WASMTIME_UNSAFE_COMPONENT_THREAD_OS_SPAWN=1` moves
-            // `thread.spawn-indirect` work onto host OS threads.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-speedup-parallel.wast",
-            // Fork-local unsafe ABI-shaped speedup probe: this only succeeds
-            // when the parent can wait on trampoline-owned shared slots while
-            // OS-owned child threads publish completed payloads.
-            "misc_testsuite/component-model-threading/thread-spawn-indirect-os-trampoline-vibe-abi-speedup-parallel.wast",
-            // Wasmtime doesn't expose the component-model `cm64` feature toggle
-            // yet, so this parser-only test can't be enabled here.
-            "test/wasm-tools/memory64.wast",
-        ];
-        if unsupported.iter().any(|part| self.path.ends_with(part)) {
-            return true;
-        }
-
         // Some tests are known to fail with the pooling allocator
         if config.pooling {
             // allocates too much memory for the pooling configuration here
@@ -560,6 +530,7 @@ impl WastTest {
                 // shared memories + pooling allocator aren't supported yet
                 "misc_testsuite/memory-combos.wast",
                 "misc_testsuite/threads/atomics-end-of-memory.wast",
+                "misc_testsuite/threads/atomic_wait_endianness.wast",
                 "misc_testsuite/threads/LB.wast",
                 "misc_testsuite/threads/LB_atomic.wast",
                 "misc_testsuite/threads/MP.wast",
@@ -615,114 +586,17 @@ impl WastTest {
             let unsupported = [
                 "extended-const/elem.wast",
                 "extended-const/global.wast",
-                "misc_testsuite/component-model/modules.wast",
-                "misc_testsuite/externref-id-function.wast",
-                "misc_testsuite/externref-segment.wast",
                 "misc_testsuite/externref-segments.wast",
                 "misc_testsuite/externref-table-dropped-segment-issue-8281.wast",
-                "misc_testsuite/linking-errors.wast",
                 "misc_testsuite/many_table_gets_lead_to_gc.wast",
-                "misc_testsuite/mutable_externref_globals.wast",
-                "misc_testsuite/no-mixup-stack-maps.wast",
                 "misc_testsuite/no-panic.wast",
-                "misc_testsuite/simple_ref_is_null.wast",
+                // Winch does not implement exception handlers yet.
+                "misc_testsuite/traps-skip-catch-all.wast",
+                "spec_testsuite/throw.wast",
             ];
 
             if unsupported.iter().any(|part| self.path.ends_with(part)) {
                 return true;
-            }
-
-            #[cfg(target_arch = "aarch64")]
-            {
-                let unsupported = [
-                    "misc_testsuite/int-to-float-splat.wast",
-                    "misc_testsuite/issue6562.wast",
-                    "misc_testsuite/memory64/simd.wast",
-                    "misc_testsuite/simd/almost-extmul.wast",
-                    "misc_testsuite/simd/canonicalize-nan.wast",
-                    "misc_testsuite/simd/cvt-from-uint.wast",
-                    "misc_testsuite/simd/edge-of-memory.wast",
-                    "misc_testsuite/simd/interesting-float-splat.wast",
-                    "misc_testsuite/simd/issue4807.wast",
-                    "misc_testsuite/simd/issue6725-no-egraph-panic.wast",
-                    "misc_testsuite/simd/issue_3173_select_v128.wast",
-                    "misc_testsuite/simd/issue_3327_bnot_lowering.wast",
-                    "misc_testsuite/simd/load_splat_out_of_bounds.wast",
-                    "misc_testsuite/simd/replace-lane-preserve.wast",
-                    "misc_testsuite/simd/spillslot-size-fuzzbug.wast",
-                    "misc_testsuite/simd/sse-cannot-fold-unaligned-loads.wast",
-                    "misc_testsuite/simd/unaligned-load.wast",
-                    "misc_testsuite/simd/v128-select.wast",
-                    "misc_testsuite/winch/issue-10331.wast",
-                    "misc_testsuite/winch/issue-10357.wast",
-                    "misc_testsuite/winch/issue-10460.wast",
-                    "misc_testsuite/winch/replace_lane.wast",
-                    "misc_testsuite/winch/simd_multivalue.wast",
-                    "misc_testsuite/winch/v128_load_lane_invalid_address.wast",
-                    "spec_testsuite/proposals/annotations/simd_lane.wast",
-                    "spec_testsuite/proposals/multi-memory/simd_memory-multi.wast",
-                    "spec_testsuite/simd_address.wast",
-                    "spec_testsuite/simd_align.wast",
-                    "spec_testsuite/simd_bit_shift.wast",
-                    "spec_testsuite/simd_bitwise.wast",
-                    "spec_testsuite/simd_boolean.wast",
-                    "spec_testsuite/simd_const.wast",
-                    "spec_testsuite/simd_conversions.wast",
-                    "spec_testsuite/simd_f32x4.wast",
-                    "spec_testsuite/simd_f32x4_arith.wast",
-                    "spec_testsuite/simd_f32x4_cmp.wast",
-                    "spec_testsuite/simd_f32x4_pmin_pmax.wast",
-                    "spec_testsuite/simd_f32x4_rounding.wast",
-                    "spec_testsuite/simd_f64x2.wast",
-                    "spec_testsuite/simd_f64x2_arith.wast",
-                    "spec_testsuite/simd_f64x2_cmp.wast",
-                    "spec_testsuite/simd_f64x2_pmin_pmax.wast",
-                    "spec_testsuite/simd_f64x2_rounding.wast",
-                    "spec_testsuite/simd_i16x8_arith.wast",
-                    "spec_testsuite/simd_i16x8_arith2.wast",
-                    "spec_testsuite/simd_i16x8_cmp.wast",
-                    "spec_testsuite/simd_i16x8_extadd_pairwise_i8x16.wast",
-                    "spec_testsuite/simd_i16x8_extmul_i8x16.wast",
-                    "spec_testsuite/simd_i16x8_q15mulr_sat_s.wast",
-                    "spec_testsuite/simd_i16x8_sat_arith.wast",
-                    "spec_testsuite/simd_i32x4_arith.wast",
-                    "spec_testsuite/simd_i32x4_arith2.wast",
-                    "spec_testsuite/simd_i32x4_cmp.wast",
-                    "spec_testsuite/simd_i32x4_dot_i16x8.wast",
-                    "spec_testsuite/simd_i32x4_extadd_pairwise_i16x8.wast",
-                    "spec_testsuite/simd_i32x4_extmul_i16x8.wast",
-                    "spec_testsuite/simd_i32x4_trunc_sat_f32x4.wast",
-                    "spec_testsuite/simd_i32x4_trunc_sat_f64x2.wast",
-                    "spec_testsuite/simd_i64x2_arith.wast",
-                    "spec_testsuite/simd_i64x2_arith2.wast",
-                    "spec_testsuite/simd_i64x2_cmp.wast",
-                    "spec_testsuite/simd_i64x2_extmul_i32x4.wast",
-                    "spec_testsuite/simd_i8x16_arith.wast",
-                    "spec_testsuite/simd_i8x16_arith2.wast",
-                    "spec_testsuite/simd_i8x16_cmp.wast",
-                    "spec_testsuite/simd_i8x16_sat_arith.wast",
-                    "spec_testsuite/simd_int_to_int_extend.wast",
-                    "spec_testsuite/simd_lane.wast",
-                    "spec_testsuite/simd_load.wast",
-                    "spec_testsuite/simd_load16_lane.wast",
-                    "spec_testsuite/simd_load32_lane.wast",
-                    "spec_testsuite/simd_load64_lane.wast",
-                    "spec_testsuite/simd_load8_lane.wast",
-                    "spec_testsuite/simd_load_extend.wast",
-                    "spec_testsuite/simd_load_splat.wast",
-                    "spec_testsuite/simd_load_zero.wast",
-                    "spec_testsuite/simd_select.wast",
-                    "spec_testsuite/simd_splat.wast",
-                    "spec_testsuite/simd_store.wast",
-                    "spec_testsuite/simd_store16_lane.wast",
-                    "spec_testsuite/simd_store32_lane.wast",
-                    "spec_testsuite/simd_store64_lane.wast",
-                    "spec_testsuite/simd_store8_lane.wast",
-                ];
-
-                if unsupported.iter().any(|part| self.path.ends_with(part)) {
-                    return true;
-                }
             }
 
             #[cfg(target_arch = "x86_64")]
@@ -746,9 +620,14 @@ impl WastTest {
                         "misc_testsuite/simd/spillslot-size-fuzzbug.wast",
                         "misc_testsuite/simd/sse-cannot-fold-unaligned-loads.wast",
                         "misc_testsuite/winch/issue-10331.wast",
+                        "misc_testsuite/int-to-float-splat.wast",
+                        "misc_testsuite/simd/cvt-from-uint.wast",
                         "misc_testsuite/winch/replace_lane.wast",
                         "misc_testsuite/simd/riscv64-replicated-imm5-works.wast",
                         "misc_testsuite/simd/v128-equal.wast",
+                        "misc_testsuite/winch/issue-10331.wast",
+                        "misc_testsuite/int-to-float-splat.wast",
+                        "misc_testsuite/simd/cvt-from-uint.wast",
                         "spec_testsuite/simd_align.wast",
                         "spec_testsuite/simd_boolean.wast",
                         "spec_testsuite/simd_conversions.wast",
@@ -785,7 +664,14 @@ impl WastTest {
                         "spec_testsuite/simd_bitwise.wast",
                         "misc_testsuite/simd/load_splat_out_of_bounds.wast",
                         "misc_testsuite/simd/unaligned-load.wast",
-                        "multi-memory/simd_memory-multi.wast",
+                        "misc_testsuite/simd/riscv64-replicated-imm5-works.wast",
+                        "misc_testsuite/simd/issue6725-no-egraph-panic.wast",
+                        "misc_testsuite/winch/replace_lane.wast",
+                        "misc_testsuite/simd/v128-equal.wast",
+                        "misc_testsuite/winch/issue-10331.wast",
+                        "misc_testsuite/int-to-float-splat.wast",
+                        "misc_testsuite/simd/cvt-from-uint.wast",
+                        "spec_testsuite/simd_memory-multi.wast",
                         "misc_testsuite/simd/issue4807.wast",
                         "spec_testsuite/simd_const.wast",
                         "spec_testsuite/simd_i8x16_sat_arith.wast",

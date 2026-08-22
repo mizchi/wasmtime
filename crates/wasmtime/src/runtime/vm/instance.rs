@@ -427,10 +427,6 @@ impl Instance {
     }
 
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) fn component_thread_imported_table(&self, index: TableIndex) -> VMTableImport {
         *self.imported_table(index)
     }
@@ -441,10 +437,6 @@ impl Instance {
     }
 
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) fn component_thread_imported_memory(&self, index: MemoryIndex) -> VMMemoryImport {
         *self.imported_memory(index)
     }
@@ -455,10 +447,6 @@ impl Instance {
     }
 
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) fn component_thread_imported_global(&self, index: GlobalIndex) -> VMGlobalImport {
         *self.imported_global(index)
     }
@@ -491,19 +479,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset_raw(self.offsets().tables().at(index)) }
     }
 
-    /// Replaces the VMContext table definition for a defined table in the
-    /// fork-local Component Model thread experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `table` is type-compatible with this
-    /// instance's table and that its base pointer remains valid for this
-    /// instance's lifetime.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_defined_table(
         self: Pin<&mut Self>,
         index: DefinedTableIndex,
@@ -512,28 +488,15 @@ impl Instance {
         self.set_table(index, table);
     }
 
-    /// Replaces an imported-table slot for the fork-local Component Model
-    /// thread experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `import` is type-compatible with the
-    /// imported table and that both the table definition and owner `vmctx`
-    /// remain valid for this instance's lifetime.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_imported_table(
         self: Pin<&mut Self>,
         index: TableIndex,
         import: VMTableImport,
     ) {
         unsafe {
-            let offset = self.offsets().vmctx_vmtable_import(index);
-            let slot = self.vmctx_plus_offset_mut::<VMTableImport>(offset);
-            *slot = import;
+            let offset = self.offsets().imported_tables().at(index);
+            *self.vmctx_plus_offset_mut::<VMTableImport>(offset) = import;
         }
     }
 
@@ -574,92 +537,41 @@ impl Instance {
         }
     }
 
-    /// Replaces the VMContext memory-definition pointer for a defined memory in
-    /// the fork-local Component Model thread experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `ptr` remains valid for this instance's
-    /// lifetime and that the replacement preserves the module's memory type,
-    /// store, and thread-safety invariants.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_defined_memory(
         self: Pin<&mut Self>,
         index: DefinedMemoryIndex,
         ptr: NonNull<VMMemoryDefinition>,
     ) {
         unsafe {
-            let offset = self.offsets().vmctx_vmmemory_pointer(index);
-            let slot = self.vmctx_plus_offset_mut::<VmPtr<VMMemoryDefinition>>(offset);
-            *slot = ptr.into();
+            let offset = self.offsets().memories().at(index);
+            *self.vmctx_plus_offset_mut::<VmPtr<VMMemoryDefinition>>(offset) = ptr.into();
         }
     }
 
-    /// Replaces both the VMContext memory-definition pointer and the
-    /// host-side [`Memory::Shared`] object for a defined memory in the
-    /// fork-local Component Model thread experiment.
-    ///
-    /// This is needed for atomic wait/notify because the libcall looks up the
-    /// defined memory object in the current store to reach the `SharedMemory`
-    /// parking spot. Rebinding only the `VMMemoryDefinition` pointer shares
-    /// loads/stores but leaves futex queues on the child allocation.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `memory` is type-compatible with this
-    /// defined memory, remains valid for this instance's lifetime, and that the
-    /// replacement preserves the store and component ownership invariants for
-    /// the fork-local OS-thread experiment.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_defined_shared_memory(
         mut self: Pin<&mut Self>,
         index: DefinedMemoryIndex,
         memory: SharedMemory,
     ) {
-        let ptr = memory.vmmemory_ptr();
         unsafe {
+            let ptr = memory.vmmemory_ptr();
             self.as_mut()
                 .component_thread_rebind_defined_memory(index, ptr);
+            *self.as_mut().get_defined_memory_mut(index) = Memory::Shared(memory);
         }
-
-        let slot = self.as_mut().get_defined_memory_mut(index);
-        debug_assert!(
-            slot.is_shared_memory(),
-            "component thread shared-memory rebind must target a shared memory"
-        );
-        *slot = Memory::Shared(memory);
     }
 
-    /// Replaces the imported-memory definition pointer for the fork-local
-    /// Component Model thread experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `ptr` is type-compatible with the imported
-    /// memory, remains valid for this instance's lifetime, and is coherent with
-    /// the import's owning `vmctx` for any operations that consult it.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_imported_memory_from(
         self: Pin<&mut Self>,
         index: MemoryIndex,
         ptr: NonNull<VMMemoryDefinition>,
     ) {
         unsafe {
-            let offset = self.offsets().vmctx_vmmemory_import_from(index);
-            let slot = self.vmctx_plus_offset_mut::<VmPtr<VMMemoryDefinition>>(offset);
-            *slot = ptr.into();
+            let offset = self.offsets().imported_memories().at(index);
+            self.vmctx_plus_offset_mut::<VMMemoryImport>(offset).from = ptr.into();
         }
     }
 
@@ -668,16 +580,7 @@ impl Instance {
         unsafe { self.vmctx_plus_offset_raw(self.offsets().globals().at(index)) }
     }
 
-    /// Reads a defined global value for the fork-local Component Model thread
-    /// experiment.
-    ///
-    /// This copies the inline VMContext global definition. It does not create
-    /// shared storage for defined globals by itself.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) fn component_thread_read_defined_global(
         &self,
         index: DefinedGlobalIndex,
@@ -685,19 +588,7 @@ impl Instance {
         unsafe { self.global_ptr(index).as_ptr().read() }
     }
 
-    /// Writes a defined global value for the fork-local Component Model thread
-    /// experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `definition` is type-compatible with this
-    /// instance's global and that copying it does not violate any GC or
-    /// reference ownership invariant.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_write_defined_global(
         self: Pin<&mut Self>,
         index: DefinedGlobalIndex,
@@ -708,28 +599,15 @@ impl Instance {
         }
     }
 
-    /// Replaces an imported-global slot for the fork-local Component Model
-    /// thread experiment.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `import` is type-compatible with the
-    /// imported global and that the pointed-to global remains valid for this
-    /// instance's lifetime.
     #[cfg(feature = "component-model-async")]
-    #[allow(
-        dead_code,
-        reason = "fork-local scaffold used by the component OS-thread experiment"
-    )]
     pub(crate) unsafe fn component_thread_rebind_imported_global(
         self: Pin<&mut Self>,
         index: GlobalIndex,
         import: VMGlobalImport,
     ) {
         unsafe {
-            let offset = self.offsets().vmctx_vmglobal_import(index);
-            let slot = self.vmctx_plus_offset_mut::<VMGlobalImport>(offset);
-            *slot = import;
+            let offset = self.offsets().imported_globals().at(index);
+            *self.vmctx_plus_offset_mut::<VMGlobalImport>(offset) = import;
         }
     }
 

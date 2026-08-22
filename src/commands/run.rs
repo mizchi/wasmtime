@@ -393,10 +393,7 @@ impl RunCommand {
 
         #[cfg(feature = "component-model-async")]
         {
-            let component_thread_host = store.data().clone();
-            store.set_unsafe_component_thread_store_data_factory(move || {
-                component_thread_host.clone()
-            });
+            store.set_unsafe_component_thread_store_data_factory(Host::default);
         }
 
         Ok((store, linker))

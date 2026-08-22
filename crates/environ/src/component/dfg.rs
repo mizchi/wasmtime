@@ -30,7 +30,7 @@
 use crate::component::*;
 use crate::error::Result;
 use crate::prelude::*;
-use crate::{EntityIndex, EntityRef, ModuleInternedTypeIndex, PrimaryMap, WasmValType};
+use crate::{EntityIndex, EntityRef, ModuleInternedTypeIndex, PrimaryMap, Trap, WasmValType};
 use cranelift_entity::packed_option::PackedOption;
 use indexmap::IndexMap;
 use info::LinearMemoryOptions;
@@ -369,10 +369,6 @@ pub enum Trampoline {
     WaitableJoin {
         instance: RuntimeComponentInstanceIndex,
     },
-    ThreadYield {
-        instance: RuntimeComponentInstanceIndex,
-        cancellable: bool,
-    },
     SubtaskDrop {
         instance: RuntimeComponentInstanceIndex,
     },
@@ -473,10 +469,12 @@ pub enum Trampoline {
     FutureTransfer,
     StreamTransfer,
     ErrorContextTransfer,
-    Trap,
+    Trap(Trap),
     EnterSyncCall,
     ExitSyncCall,
-    ThreadIndex,
+    ThreadIndex {
+        instance: RuntimeComponentInstanceIndex,
+    },
     ThreadSpawnRef {
         instance: RuntimeComponentInstanceIndex,
         shared: bool,
@@ -496,22 +494,30 @@ pub enum Trampoline {
     ThreadAvailableParallelism {
         shared: bool,
     },
-    ThreadSuspendToSuspended {
+    ThreadResumeLater {
         instance: RuntimeComponentInstanceIndex,
-        cancellable: bool,
     },
     ThreadSuspend {
         instance: RuntimeComponentInstanceIndex,
         cancellable: bool,
     },
-    ThreadSuspendTo {
+    ThreadYield {
         instance: RuntimeComponentInstanceIndex,
         cancellable: bool,
     },
-    ThreadUnsuspend {
+    ThreadSuspendThenResume {
         instance: RuntimeComponentInstanceIndex,
+        cancellable: bool,
     },
-    ThreadYieldToSuspended {
+    ThreadYieldThenResume {
+        instance: RuntimeComponentInstanceIndex,
+        cancellable: bool,
+    },
+    ThreadSuspendThenPromote {
+        instance: RuntimeComponentInstanceIndex,
+        cancellable: bool,
+    },
+    ThreadYieldThenPromote {
         instance: RuntimeComponentInstanceIndex,
         cancellable: bool,
     },
@@ -1012,13 +1018,6 @@ impl LinearizeDfg<'_> {
             Trampoline::WaitableJoin { instance } => info::Trampoline::WaitableJoin {
                 instance: *instance,
             },
-            Trampoline::ThreadYield {
-                instance,
-                cancellable,
-            } => info::Trampoline::ThreadYield {
-                instance: *instance,
-                cancellable: *cancellable,
-            },
             Trampoline::SubtaskDrop { instance } => info::Trampoline::SubtaskDrop {
                 instance: *instance,
             },
@@ -1170,10 +1169,12 @@ impl LinearizeDfg<'_> {
             Trampoline::FutureTransfer => info::Trampoline::FutureTransfer,
             Trampoline::StreamTransfer => info::Trampoline::StreamTransfer,
             Trampoline::ErrorContextTransfer => info::Trampoline::ErrorContextTransfer,
-            Trampoline::Trap => info::Trampoline::Trap,
+            Trampoline::Trap(trap) => info::Trampoline::Trap(*trap),
             Trampoline::EnterSyncCall => info::Trampoline::EnterSyncCall,
             Trampoline::ExitSyncCall => info::Trampoline::ExitSyncCall,
-            Trampoline::ThreadIndex => info::Trampoline::ThreadIndex,
+            Trampoline::ThreadIndex { instance } => info::Trampoline::ThreadIndex {
+                instance: *instance,
+            },
             Trampoline::ThreadSpawnRef {
                 instance,
                 shared,
@@ -1206,19 +1207,8 @@ impl LinearizeDfg<'_> {
             Trampoline::ThreadAvailableParallelism { shared } => {
                 info::Trampoline::ThreadAvailableParallelism { shared: *shared }
             }
-            Trampoline::ThreadSuspendToSuspended {
-                instance,
-                cancellable,
-            } => info::Trampoline::ThreadSuspendToSuspended {
+            Trampoline::ThreadResumeLater { instance } => info::Trampoline::ThreadResumeLater {
                 instance: *instance,
-                cancellable: *cancellable,
-            },
-            Trampoline::ThreadSuspendTo {
-                instance,
-                cancellable,
-            } => info::Trampoline::ThreadSuspendTo {
-                instance: *instance,
-                cancellable: *cancellable,
             },
             Trampoline::ThreadSuspend {
                 instance,
@@ -1227,13 +1217,38 @@ impl LinearizeDfg<'_> {
                 instance: *instance,
                 cancellable: *cancellable,
             },
-            Trampoline::ThreadUnsuspend { instance } => info::Trampoline::ThreadUnsuspend {
-                instance: *instance,
-            },
-            Trampoline::ThreadYieldToSuspended {
+            Trampoline::ThreadYield {
                 instance,
                 cancellable,
-            } => info::Trampoline::ThreadYieldToSuspended {
+            } => info::Trampoline::ThreadYield {
+                instance: *instance,
+                cancellable: *cancellable,
+            },
+            Trampoline::ThreadSuspendThenResume {
+                instance,
+                cancellable,
+            } => info::Trampoline::ThreadSuspendThenResume {
+                instance: *instance,
+                cancellable: *cancellable,
+            },
+            Trampoline::ThreadYieldThenResume {
+                instance,
+                cancellable,
+            } => info::Trampoline::ThreadYieldThenResume {
+                instance: *instance,
+                cancellable: *cancellable,
+            },
+            Trampoline::ThreadSuspendThenPromote {
+                instance,
+                cancellable,
+            } => info::Trampoline::ThreadSuspendThenPromote {
+                instance: *instance,
+                cancellable: *cancellable,
+            },
+            Trampoline::ThreadYieldThenPromote {
+                instance,
+                cancellable,
+            } => info::Trampoline::ThreadYieldThenPromote {
                 instance: *instance,
                 cancellable: *cancellable,
             },

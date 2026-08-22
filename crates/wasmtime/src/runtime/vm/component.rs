@@ -549,7 +549,7 @@ impl ComponentInstance {
         ptr: NonNull<VMMemoryDefinition>,
     ) {
         unsafe {
-            let offset = self.offsets.runtime_memory(idx);
+            let offset = self.offsets.memories().at(idx);
             let storage = self.vmctx_plus_offset_mut::<VmPtr<VMMemoryDefinition>>(offset);
             *storage = ptr.into();
         }
@@ -634,7 +634,7 @@ impl ComponentInstance {
         import: VMTableImport,
     ) {
         unsafe {
-            let offset = self.offsets.runtime_table(idx);
+            let offset = self.offsets.tables().at(idx);
             let storage = self.vmctx_plus_offset_mut::<VMTableImport>(offset);
             *storage = import;
         }
