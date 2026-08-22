@@ -2458,10 +2458,16 @@ impl Config {
                     } => {
                         // Stack switching supported on (non-Pulley) Cranelift.
                     }
+                    Triple {
+                        architecture: Architecture::Aarch64(_),
+                        operating_system: OperatingSystem::MacOSX(_) | OperatingSystem::Darwin(_),
+                        ..
+                    } => {
+                        // Stack switching supported on Apple Silicon Cranelift.
+                    }
 
                     _ => {
-                        // On platforms other than x64 Unix-like, we don't
-                        // support stack switching.
+                        // No runtime/codegen stack-switch implementation.
                         unsupported |= WasmFeatures::STACK_SWITCHING;
                     }
                 }

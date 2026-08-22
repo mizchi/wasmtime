@@ -55,8 +55,10 @@ mod stack_creator;
 mod stack_overflow;
 #[cfg(all(
     feature = "stack-switching",
-    target_os = "linux",
-    target_arch = "x86_64"
+    any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+    )
 ))]
 mod stack_switching;
 mod store;

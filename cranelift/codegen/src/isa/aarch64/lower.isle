@@ -2558,6 +2558,14 @@
             (info BoxReturnCallIndInfo (gen_return_call_ind_info abi target uses)))
         (side_effect (return_call_ind_impl info))))
 
+;;;; Rules for `stack_switch` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rule (lower (stack_switch _ store_context_ptr load_context_ptr in_payload0))
+      (if-let (StackSwitchModel.Basic) (stack_switch_model))
+      (a64_stack_switch_basic (put_in_reg store_context_ptr)
+                              (put_in_reg load_context_ptr)
+                              (put_in_reg in_payload0)))
+
 ;;;; Rules for loads ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule load_i8_aarch64_uload8 (lower

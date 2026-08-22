@@ -2941,6 +2941,67 @@ impl MachInstEmit for Inst {
                 // Nothing: this is a pseudoinstruction that serves
                 // only to constrain registers at a certain point.
             }
+            &Inst::StackSwitchBasic {
+                store_context_ptr,
+                load_context_ptr,
+                ..
+            } => {
+                // x16/x17 are reserved from regalloc by the AArch64 backend.
+                let tmp1 = spilltmp_reg();
+                let tmp2 = tmp2_reg();
+                let layout = super::stack_switch::control_context_layout();
+
+                let ldr = |offset: u32, base: Reg, dst: Reg| {
+                    debug_assert_eq!(offset % 8, 0);
+                    0xf9400000
+                        | ((offset / 8) << 10)
+                        | (machreg_to_gpr(base) << 5)
+                        | machreg_to_gpr(dst)
+                };
+                let str_ = |offset: u32, base: Reg, src: Reg| {
+                    debug_assert_eq!(offset % 8, 0);
+                    0xf9000000
+                        | ((offset / 8) << 10)
+                        | (machreg_to_gpr(base) << 5)
+                        | machreg_to_gpr(src)
+                };
+                let mov = |dst: Reg, src: Reg| {
+                    0xaa0003e0 | (machreg_to_gpr(src) << 16) | machreg_to_gpr(dst)
+                };
+                let mov_from_sp = |dst: Reg| {
+                    0x91000000 | (machreg_to_gpr(stack_reg()) << 5) | machreg_to_gpr(dst)
+                };
+                let mov_to_sp = |src: Reg| {
+                    0x91000000 | (machreg_to_gpr(src) << 5) | machreg_to_gpr(stack_reg())
+                };
+
+                // Exchange SP. The contexts may alias, so the incoming value
+                // must be loaded before the outgoing value is stored.
+                sink.put4(ldr(layout.stack_pointer_offset, load_context_ptr, tmp1));
+                sink.put4(mov_from_sp(tmp2));
+                sink.put4(str_(layout.stack_pointer_offset, store_context_ptr, tmp2));
+                sink.put4(mov_to_sp(tmp1));
+
+                // Exchange FP, preserving a walkable continuation frame chain.
+                sink.put4(ldr(layout.frame_pointer_offset, load_context_ptr, tmp1));
+                sink.put4(str_(
+                    layout.frame_pointer_offset,
+                    store_context_ptr,
+                    fp_reg(),
+                ));
+                sink.put4(mov(fp_reg(), tmp1));
+
+                // Save the address immediately following the indirect branch,
+                // then branch to the incoming continuation's PC.
+                sink.put4(ldr(layout.ip_offset, load_context_ptr, tmp1));
+                let resume = sink.get_label();
+                let adr_offset = sink.cur_offset();
+                sink.put4(enc_adr(0, writable_tmp2_reg()));
+                sink.use_label_at_offset(adr_offset, resume, LabelUse::Adr21);
+                sink.put4(str_(layout.ip_offset, store_context_ptr, tmp2));
+                sink.put4(enc_br(tmp1));
+                sink.bind_label(resume, state.ctrl_plane_mut());
+            }
             &Inst::Ret {} => {
                 sink.put4(0xd65f03c0);
             }

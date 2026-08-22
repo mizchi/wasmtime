@@ -831,6 +831,12 @@
        (Rets
         (rets VecRetPair))
 
+       (StackSwitchBasic
+        (store_context_ptr Reg)
+        (load_context_ptr Reg)
+        (in_payload0 Reg)
+        (out_payload0 WritableReg))
+
        ;; ---- branches (exactly one must appear at end of BB) ----
 
        ;; A machine return instruction.
@@ -4730,6 +4736,15 @@
 (decl return_call_ind_impl (BoxReturnCallIndInfo) SideEffectNoResult)
 (rule (return_call_ind_impl info)
       (SideEffectNoResult.Inst (MInst.ReturnCallInd info)))
+
+(decl a64_stack_switch_basic (Reg Reg Reg) Reg)
+(rule (a64_stack_switch_basic store_context_ptr load_context_ptr in_payload0)
+      (let ((out_payload0 WritableReg (temp_writable_reg $I64))
+            (_ Unit (emit (MInst.StackSwitchBasic store_context_ptr
+                                                  load_context_ptr
+                                                  in_payload0
+                                                  out_payload0))))
+        out_payload0))
 
 ;; Helpers for pinned register manipulation.
 

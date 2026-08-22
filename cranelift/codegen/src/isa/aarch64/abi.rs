@@ -1637,7 +1637,7 @@ const fn all_clobbers() -> PRegSet {
 
 const DEFAULT_AAPCS_CLOBBERS: PRegSet = default_aapcs_clobbers();
 const WINCH_CLOBBERS: PRegSet = winch_clobbers();
-const ALL_CLOBBERS: PRegSet = all_clobbers();
+pub(crate) const ALL_CLOBBERS: PRegSet = all_clobbers();
 const NO_CLOBBERS: PRegSet = PRegSet::empty();
 
 const fn create_reg_env(enable_pinned_reg: bool) -> MachineEnv {

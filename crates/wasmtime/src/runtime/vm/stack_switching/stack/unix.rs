@@ -369,10 +369,14 @@ cfg_select! {
         mod x86_64;
         use x86_64::*;
     }
+    all(target_arch = "aarch64", target_os = "macos") => {
+        mod aarch64;
+        use aarch64::*;
+    }
     _ => {
         // Note that this should be unreachable: In stack.rs, we currently select
         // the module defined in the current file only if we are on unix AND
-        // x86_64.
+        // an architecture selected by stack.rs.
         compile_error!("the stack switching feature is not supported on this CPU architecture");
     }
 }

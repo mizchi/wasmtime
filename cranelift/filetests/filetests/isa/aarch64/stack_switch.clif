@@ -1,0 +1,12 @@
+test compile
+set opt_level=speed
+set stack_switch_model=basic
+target aarch64
+
+;; The basic stack-switch model must lower on AArch64. Runtime integration
+;; tests exercise the control-context layout and payload transfer end-to-end.
+function %switch(i64, i64, i64) -> i64 {
+block0(v0: i64, v1: i64, v2: i64):
+  v3 = stack_switch v0, v1, v2
+  return v3
+}
